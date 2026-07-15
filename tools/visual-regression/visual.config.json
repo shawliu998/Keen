@@ -1,0 +1,14 @@
+{
+  "baseUrl": "http://127.0.0.1:1430",
+  "outputDirectory": "../../artifacts/visual-diff",
+  "pages": [
+    {
+      "name": "home",
+      "route": "/?demo=true&visualTest=true",
+      "reference": "../../references/hyperknow/home.png",
+      "viewport": { "width": 1440, "height": 920 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    }
+  ]
+}

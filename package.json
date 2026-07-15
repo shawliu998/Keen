@@ -1,0 +1,25 @@
+{
+  "name": "keen",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tools/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@keen/desktop",
+    "build": "npm run build --workspace=@keen/desktop",
+    "test": "npm run test --workspace=@keen/desktop",
+    "typecheck": "npm run typecheck --workspace=@keen/desktop",
+    "lint": "npm run lint --workspace=@keen/desktop",
+    "tauri": "npm run tauri --workspace=@keen/desktop",
+    "visual:test": "npm run test --workspace=@keen/visual-regression",
+    "test:python": ".venv/bin/python -m pytest services/learning-core/tests",
+    "test:rust": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "check": "npm run lint && npm run typecheck && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
