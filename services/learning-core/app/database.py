@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,7 +15,21 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         if self.path != Path(":memory:"):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path, timeout=10.0)
+            if self.path.exists() or self.path.is_symlink():
+                metadata = self.path.lstat()
+                if (
+                    self.path.is_symlink()
+                    or not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                ):
+                    raise RuntimeError("learning-core database path must be a regular file")
+                os.chmod(self.path, 0o600)
+        # FastAPI may enter, consume, and close a synchronous yield dependency on
+        # different worker threads. Each connection remains request-scoped and is
+        # never used concurrently, so disabling SQLite's creator-thread assertion is safe.
+        connection = sqlite3.connect(self.path, timeout=10.0, check_same_thread=False)
+        if self.path != Path(":memory:"):
+            os.chmod(self.path, 0o600)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")

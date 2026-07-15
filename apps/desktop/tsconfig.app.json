@@ -15,7 +15,11 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@keen/api-client": ["../../packages/api-client/src/index.ts"]
+    },
     "types": ["vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src", "tests", "../../packages/domain/src", "../../packages/ui/src"]
+  "include": ["src", "tests", "../../packages/api-client/src", "../../packages/domain/src", "../../packages/ui/src"]
 }

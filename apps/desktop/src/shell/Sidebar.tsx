@@ -3,6 +3,8 @@ import { BookOpen, Brain, CalendarDays, ChevronLeft, CircleUserRound, FileStack,
 import { IconButton } from "@keen/ui";
 import { recentConversations, recentSessions } from "../data/seed";
 import { useAppStore } from "../state/appStore";
+import { LearningCoreStatus } from "../components/LearningCoreStatus";
+import { useLearningCore } from "../services/LearningCoreProvider";
 
 const primary = [
   ["/", "Home", Home], ["/feed", "Learning Feed", Sparkles], ["/knowledge", "Knowledge Base", FileStack],
@@ -15,6 +17,7 @@ const learning = [
 export function Sidebar() {
   const navigate = useNavigate();
   const { toggleSidebar } = useAppStore();
+  const { status } = useLearningCore();
   const nav = (items: typeof primary | typeof learning) => items.map(([to, label, Icon]) => (
     <NavLink key={to} to={to} end={to === "/"} className={({ isActive }) => `nav-row ${isActive ? "active" : ""}`} title={label}>
       <Icon size={17} aria-hidden /><span>{label}</span>
@@ -34,7 +37,7 @@ export function Sidebar() {
         {recentConversations.map((label, i) => <NavLink to={`/conversation/${i + 1}`} className="recent-row" key={label}><MessageCircle size={14} /><span>{label}</span></NavLink>)}
       </div>
       <div className="sidebar-footer">
-        <div className="agent-status" aria-label="Demo mode; learning sidecar offline"><span className="paused-dot" /><span>Demo mode · sidecar offline</span></div>
+        <div className="agent-status" aria-live="polite"><LearningCoreStatus status={status} /></div>
         <NavLink to="/settings" className="user-row"><CircleUserRound size={22} /><span><strong>Alex Chen</strong><small>Personal workspace</small></span><Settings size={16} /></NavLink>
       </div>
     </aside>

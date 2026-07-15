@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApiModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class HealthResponse(ApiModel):
@@ -85,3 +85,67 @@ class DemoState(ApiModel):
     courses: list[Course]
     tasks: list[StudyTask]
     mastery: list[MasteryState]
+
+
+DocumentStatus = Literal["queued", "parsing", "chunking", "indexed", "failed"]
+
+
+class DocumentRecord(ApiModel):
+    id: str
+    name: str
+    mime_type: str = Field(alias="mimeType")
+    size_bytes: int = Field(alias="sizeBytes", gt=0)
+    content_hash: str = Field(alias="contentHash", min_length=64, max_length=64)
+    status: DocumentStatus
+    page_count: int = Field(alias="pageCount", ge=0)
+    chunk_count: int = Field(alias="chunkCount", ge=0)
+    parser: str
+    created_at: datetime = Field(alias="createdAt")
+    error: str | None
+    course_id: str | None = Field(default=None, exclude=True)
+
+
+class DocumentImportResponse(ApiModel):
+    document: DocumentRecord
+    duplicate: bool
+
+
+class DocumentListResponse(ApiModel):
+    documents: list[DocumentRecord]
+
+
+class SearchRequest(ApiModel):
+    query: str = Field(min_length=1, max_length=2_000)
+    course_id: str | None = Field(default=None, alias="courseId")
+    limit: int = Field(default=8, ge=1, le=50)
+
+
+class SearchResult(ApiModel):
+    chunk_id: str = Field(alias="chunkId")
+    document_id: str = Field(alias="documentId")
+    document_name: str = Field(alias="documentName")
+    page_number: int = Field(alias="pageNumber", ge=1)
+    section_path: list[str] = Field(alias="sectionPath")
+    text: str
+    score: float = Field(ge=0)
+
+
+class SearchResponse(ApiModel):
+    query: str
+    results: list[SearchResult]
+
+
+class Citation(ApiModel):
+    chunk_id: str = Field(alias="chunkId")
+    document_id: str = Field(alias="documentId")
+    document_name: str = Field(alias="documentName")
+    page_number: int = Field(alias="pageNumber", ge=1)
+    section_path: list[str] = Field(alias="sectionPath")
+    excerpt: str
+
+
+class GroundedQueryResponse(ApiModel):
+    answer: str
+    grounded: bool
+    citations: list[Citation]
+    note: str

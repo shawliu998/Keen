@@ -24,6 +24,7 @@ export function HomePage() {
   };
   return (
     <div className="home-page">
+      <div className="demo-disclosure"><Badge tone="warning">Demo surface</Badge><span>Prompts, recommendations, statistics, and attachments on this page are deterministic UI samples. No model runs, file is read, or learning record is changed.</span></div>
       <section className="welcome-section">
         <div className="orb" aria-hidden><span>K</span></div>
         <div><p className="eyebrow">Wednesday, July 15</p><h1>What would you like to understand?</h1><p>Ask me to teach, solve, review, or research across your learning materials.</p></div>

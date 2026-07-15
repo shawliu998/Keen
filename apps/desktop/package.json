@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
+    "@keen/api-client": "file:../../packages/api-client",
     "@keen/design-tokens": "file:../../packages/design-tokens",
     "@keen/domain": "file:../../packages/domain",
     "@keen/ui": "file:../../packages/ui",

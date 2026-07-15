@@ -1,34 +1,15 @@
 mod security;
+mod sidecar;
 
-use serde::Serialize;
-use std::sync::Mutex;
+use sidecar::{SidecarConnectionView, SidecarSupervisor};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Emitter, Manager, State,
 };
 
-#[derive(Debug)]
-struct SidecarConnection {
-    port: Option<u16>,
-    token: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SidecarConnectionView {
-    available: bool,
-    port: Option<u16>,
-    token: Option<String>,
-}
-
 #[tauri::command]
-fn get_sidecar_connection(state: State<'_, Mutex<SidecarConnection>>) -> SidecarConnectionView {
-    let connection = state.lock().expect("sidecar state lock poisoned");
-    SidecarConnectionView {
-        available: connection.port.is_some(),
-        port: connection.port,
-        token: connection.port.map(|_| connection.token.clone()),
-    }
+fn get_sidecar_connection(state: State<'_, SidecarSupervisor>) -> SidecarConnectionView {
+    state.connection_view()
 }
 
 fn install_native_menu(app: &tauri::App) -> tauri::Result<()> {
@@ -82,16 +63,23 @@ fn install_native_menu(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             install_native_menu(app)?;
-            app.manage(Mutex::new(SidecarConnection {
-                port: None,
-                token: security::generate_session_token(),
-            }));
+            let data_dir = app.path().app_data_dir()?;
+            let cache_dir = app.path().app_cache_dir()?;
+            let sidecar = SidecarSupervisor::new(data_dir.join("learning-core.sqlite3"), cache_dir);
+            app.manage(sidecar.clone());
+            sidecar.start(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<SidecarSupervisor>().shutdown();
+            }
         })
         .on_menu_event(|app, event| {
             if let Some(window) = app.get_webview_window("main") {
@@ -99,6 +87,15 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![get_sidecar_connection])
-        .run(tauri::generate_context!())
-        .expect("failed to run Keen desktop application");
+        .build(tauri::generate_context!())
+        .expect("failed to build Keen desktop application");
+
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            app_handle.state::<SidecarSupervisor>().shutdown();
+        }
+    });
 }
