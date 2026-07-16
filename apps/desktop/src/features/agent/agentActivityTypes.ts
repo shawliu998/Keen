@@ -16,6 +16,8 @@ export type AgentMutationActivity = {
   entityType: string | null;
   entityId: string | null;
   operation: "create" | "update" | "delete" | null;
+  action: "undo" | "redo" | null;
+  targetMutationId: string | null;
 };
 
 export type AgentWarningActivity = {

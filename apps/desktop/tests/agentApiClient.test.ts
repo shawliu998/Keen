@@ -416,21 +416,23 @@ describe("LearningCoreClient durable Agent SSE contract", () => {
         replayCandidate: false,
       }),
       agentSseEvent("event-tool-result", "tool_result", {
-        callId: "call-undo-1",
         invocationId: "invocation-undo-1",
         toolName: "undo_state_mutation",
-        result: { mutationId: "mutation-inverse-1" },
-        truncated: false,
+        action: "undo",
+        targetMutationId: "mutation-original-1",
+        mutationId: "mutation-inverse-1",
         replayed: false,
       }),
       agentSseEvent("event-mutation", "state_mutation", {
-        callId: "call-undo-1",
         invocationId: "invocation-undo-1",
         mutationId: "mutation-inverse-1",
         entityType: "study_task",
         entityId: "task-1",
         operation: "update",
         reversible: true,
+        action: "undo",
+        targetMutationId: "mutation-original-1",
+        replayed: false,
       }),
     ].join("");
     const client = createLearningCoreClient(

@@ -88,6 +88,8 @@ function mutationFromEvent(event: Extract<AgentRunEvent, { type: "state_mutation
       entityType: null,
       entityId: null,
       operation: null,
+      action: null,
+      targetMutationId: null,
     };
   }
   return {
@@ -97,6 +99,8 @@ function mutationFromEvent(event: Extract<AgentRunEvent, { type: "state_mutation
     entityType: event.data.entityType,
     entityId: event.data.entityId,
     operation: event.data.operation,
+    action: "action" in event.data ? event.data.action : null,
+    targetMutationId: "targetMutationId" in event.data ? event.data.targetMutationId : null,
   };
 }
 

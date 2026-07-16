@@ -114,7 +114,9 @@ export function AgentActivityPanel({
 }: AgentActivityPanelProps) {
   const override = viewStateCopy[viewState];
   const status = override ?? statusCopy[state.status];
-  const reversibleMutations = state.mutations.filter((mutation) => mutation.entityType === "study_task");
+  const reversibleMutations = state.mutations.filter(
+    (mutation) => mutation.entityType === "study_task" && mutation.action === null,
+  );
   const canCancel = runId !== null && activeStatuses.has(state.status) && viewState !== "offline" && viewState !== "provider_missing";
   const isErrorView = viewState === "provider_missing" || viewState === "provider_unavailable" || viewState === "offline" || state.status === "failed" || state.status === "interrupted";
 

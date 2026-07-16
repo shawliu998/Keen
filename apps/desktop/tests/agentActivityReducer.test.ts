@@ -116,11 +116,42 @@ describe("Agent activity reducer", () => {
       entityType: "study_task",
       entityId: "task-1",
       operation: "update",
+      action: null,
+      targetMutationId: null,
     }]);
     expect(state.warnings).toEqual([{
       eventId: "warning-1",
       code: "retrieval_partial",
       message: "One local source was unavailable.",
+    }]);
+  });
+
+  it("retains bounded Undo audit metadata without exposing the raw tool result", () => {
+    const state = reduce([{
+      id: "mutation-undo-1",
+      type: "state_mutation",
+      data: {
+        invocationId: "invocation-undo-1",
+        mutationId: "mutation-inverse-1",
+        entityType: "study_task",
+        entityId: "task-1",
+        operation: "update",
+        reversible: true,
+        action: "undo",
+        targetMutationId: "mutation-original-1",
+        replayed: false,
+      },
+    }]);
+
+    expect(state.mutations).toEqual([{
+      mutationId: "mutation-inverse-1",
+      invocationId: "invocation-undo-1",
+      replayed: false,
+      entityType: "study_task",
+      entityId: "task-1",
+      operation: "update",
+      action: "undo",
+      targetMutationId: "mutation-original-1",
     }]);
   });
 });

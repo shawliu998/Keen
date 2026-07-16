@@ -158,6 +158,14 @@ const agentEventDataSchema = z.discriminatedUnion("type", [
     type: z.literal("tool_result"),
     data: z.union([
       z.object({
+        invocationId: agentIdentifierSchema,
+        toolName: z.literal("undo_state_mutation"),
+        action: z.enum(["undo", "redo"]),
+        targetMutationId: agentIdentifierSchema,
+        mutationId: agentIdentifierSchema,
+        replayed: z.boolean(),
+      }).strict(),
+      z.object({
         callId: agentIdentifierSchema,
         invocationId: agentIdentifierSchema,
         toolName: agentToolNameSchema,
@@ -182,6 +190,17 @@ const agentEventDataSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("state_mutation"),
     data: z.union([
+      z.object({
+        invocationId: agentIdentifierSchema,
+        mutationId: agentIdentifierSchema,
+        entityType: z.literal("study_task"),
+        entityId: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/),
+        operation: z.literal("update"),
+        reversible: z.literal(true),
+        action: z.enum(["undo", "redo"]),
+        targetMutationId: agentIdentifierSchema,
+        replayed: z.boolean(),
+      }).strict(),
       z.object({
         callId: agentIdentifierSchema,
         invocationId: agentIdentifierSchema,

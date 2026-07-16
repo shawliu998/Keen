@@ -101,14 +101,16 @@ describe("AgentActivityPanel", () => {
     const onUndo = vi.fn();
     const onRedo = vi.fn();
     const mutations = [
-      { mutationId: "mutation-1", invocationId: "call-1", replayed: false, entityType: "study_task", entityId: "task-1", operation: "create" as const },
-      { mutationId: "mutation-2", invocationId: "call-2", replayed: false, entityType: "note", entityId: "note-1", operation: "create" as const },
+      { mutationId: "mutation-1", invocationId: "call-1", replayed: false, entityType: "study_task", entityId: "task-1", operation: "create" as const, action: null, targetMutationId: null },
+      { mutationId: "mutation-2", invocationId: "call-2", replayed: false, entityType: "note", entityId: "note-1", operation: "create" as const, action: null, targetMutationId: null },
+      { mutationId: "mutation-inverse-1", invocationId: "call-3", replayed: false, entityType: "study_task", entityId: "task-1", operation: "update" as const, action: "undo" as const, targetMutationId: "mutation-1" },
     ];
     const view = renderPanel({ runId: "run-1", state: state({ status: "completed", durableStatus: "completed", terminal: true, mutations }), onUndo, onRedo });
 
     await user.click(screen.getByRole("button", { name: "Undo study task created" }));
     expect(onUndo).toHaveBeenCalledWith("mutation-1");
     expect(screen.queryByText(/note/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /study task/i })).toHaveLength(1);
 
     view.rerender(
       <AgentActivityPanel
@@ -130,7 +132,7 @@ describe("AgentActivityPanel", () => {
         status: "running",
         durableStatus: "running",
         terminal: false,
-        mutations: [{ mutationId: "mutation-1", invocationId: "call-1", replayed: false, entityType: "study_task", entityId: "task-1", operation: "create" }],
+        mutations: [{ mutationId: "mutation-1", invocationId: "call-1", replayed: false, entityType: "study_task", entityId: "task-1", operation: "create", action: null, targetMutationId: null }],
       }),
       onUndo: vi.fn(),
     });
@@ -147,7 +149,7 @@ describe("AgentActivityPanel", () => {
         status: "completed",
         durableStatus: "completed",
         terminal: true,
-        mutations: [{ mutationId: "mutation-1", invocationId: "call-1", replayed: false, entityType: "study_task", entityId: "task-1", operation: "update" }],
+        mutations: [{ mutationId: "mutation-1", invocationId: "call-1", replayed: false, entityType: "study_task", entityId: "task-1", operation: "update", action: null, targetMutationId: null }],
       }),
       mutationActions: { "mutation-1": { undone: false, pendingAction: "undo", error: "Undo could not be recorded. Retry is safe." } },
       onUndo: vi.fn(),
