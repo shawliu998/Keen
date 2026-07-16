@@ -57,7 +57,7 @@ Status: **in progress**. The document/import/retrieval/citation portions exist; 
 | Learning Feed | Real `/v1/demo-state` task/mastery read with no live mutation | `in progress`; candidate generation, rationale and actions are `not started` |
 | Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools, audited mutations, allowlisted Study Task Undo/Redo HTTP, a visible Home Agent runtime/activity surface, and a configured loopback text-only provider | `in progress`; multi-turn tool-result feedback, approval execution, remaining tool groups and lifecycle E2E are open |
 | Mastery | Deterministic BKT accepts only `concept_id` + boolean correctness and writes a basic event | `in progress`; evidence weighting, traceability and algorithm version are `not started` |
-| Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery exist | `in progress`; kill-restart/socket E2E and conversation/session/attempt/review recovery remain open |
+| Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery and a real-Uvicorn/socket SIGKILL/restart E2E exist | `in progress`; automatic Tauri relaunch and conversation/session/attempt/review recovery remain open |
 
 ## Existing data model
 
@@ -470,8 +470,20 @@ hidden-reasoning tags or empty user-facing output. No configuration still produc
 an explicit injected Agent factory remains higher priority for tests. The full
 Python suite passed 588/588 with one existing Starlette warning; Ruff lint and
 format passed all 119 learning-core Python files. The current one-way provider
-protocol cannot receive tool results for a second model turn, and lifecycle
-socket kill/restart remains unverified, so Gate 3 remains in progress.
+protocol cannot receive tool results for a second model turn, so Gate 3 remains
+in progress.
+
+The socket-recovery slice now uses a test-only blocking provider behind the real
+FastAPI runtime and Uvicorn listener. It reads a durable partial SSE cursor,
+SIGKILLs an isolated server process group, restarts the same SQLite database
+with a rotated token, rejects the old token, verifies
+`interrupted/process_restarted`, replays only recovery events after
+Last-Event-ID, and proves an additional restart is idempotent. The focused test
+passed repeatedly, the socket/API subset passed 23/23, and the full Python suite
+passed 589/589 with one existing Starlette warning; Ruff lint/format passed all
+121 learning-core Python files. The helper is not shipped, and this evidence
+does not prove the Tauri supervisor automatically relaunched a packaged sidecar
+or restored the WebView, so lifecycle Gate 3 remains open.
 
 ### Gate 4 — durable Conversation and Deep Learn
 
