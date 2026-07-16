@@ -1,0 +1,312 @@
+import {
+  AgentEventStreamDisconnectedError,
+  LearningCoreRequestError,
+  LearningCoreResponseError,
+  LearningCoreSchemaError,
+  agentRunCreateRequestSchema,
+  agentRunEventSchema,
+  agentRunSchema,
+  createLearningCoreClient,
+} from "@keen/api-client";
+
+const token = "a".repeat(64);
+const timestamp = "2026-07-16T10:00:00+00:00";
+const queuedRun = {
+  id: "run-1",
+  kind: "conversation",
+  mode: "teach",
+  status: "queued",
+  provider: "automation",
+  model: "fixed-actions",
+  errorCode: null,
+  errorDetail: null,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  startedAt: null,
+  finishedAt: null,
+} as const;
+
+const createRequest = {
+  kind: "conversation",
+  userIntent: "Explain limits",
+  mode: "teach",
+  input: { question: "What is a limit?" },
+  idempotencyKey: "agent-ui-1",
+} as const;
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function agentSseEvent(id: string, event: string, data: unknown, lineEnding = "\n"): string {
+  return `id: ${id}${lineEnding}event: ${event}${lineEnding}data: ${JSON.stringify(data)}${lineEnding}${lineEnding}`;
+}
+
+function sseResponse(wire: string | Uint8Array[]): Response {
+  const parts = typeof wire === "string" ? [new TextEncoder().encode(wire)] : wire;
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      parts.forEach((part) => controller.enqueue(part));
+      controller.close();
+    },
+  }), { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } });
+}
+
+describe("LearningCoreClient Agent run JSON contract", () => {
+  it("creates, gets, and cancels Agent runs through authenticated strict routes", async () => {
+    const cancelledRun = {
+      ...queuedRun,
+      status: "cancelled",
+      errorCode: "cancelled",
+      errorDetail: "Agent run was cancelled before starting",
+      finishedAt: timestamp,
+    } as const;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/cancel")) return jsonResponse({ accepted: true, run: cancelledRun });
+      if (init?.method === "POST") return jsonResponse(queuedRun, 202);
+      return jsonResponse(queuedRun);
+    });
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    await expect(client.createAgentRun(createRequest)).resolves.toEqual(queuedRun);
+    await expect(client.getAgentRun("run-1")).resolves.toEqual(queuedRun);
+    await expect(client.cancelAgentRun("run-1")).resolves.toEqual({ accepted: true, run: cancelledRun });
+
+    const [, createInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(createInit.headers).get("Authorization")).toBe(`Bearer ${token}`);
+    expect(new Headers(createInit.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(createInit.body))).toEqual(createRequest);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://127.0.0.1:8080/v1/agent/runs",
+      "http://127.0.0.1:8080/v1/agent/runs/run-1",
+      "http://127.0.0.1:8080/v1/agent/runs/run-1/cancel",
+    ]);
+  });
+
+  it.each(["reasoning", "chainOfThought", "hidden-reasoning", "scratchpad"]) (
+    "rejects hidden reasoning recursively before sending it: %s",
+    async (hiddenKey) => {
+      const fetchMock = vi.fn();
+      const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+      const request = { ...createRequest, input: { nested: { [hiddenKey]: "private trace" } } };
+
+      await expect(Promise.resolve().then(() => client.createAgentRun(request))).rejects.toBeInstanceOf(LearningCoreRequestError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed if a run response exposes input, intent, or any unknown field", async () => {
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => jsonResponse({ ...queuedRun, input: { question: "secret" }, userIntent: "secret" }, 202)) as unknown as typeof fetch,
+    );
+
+    await expect(client.createAgentRun(createRequest)).rejects.toBeInstanceOf(LearningCoreSchemaError);
+  });
+
+  it.each([
+    ["provider_missing", 503, false],
+    ["provider_unavailable", 503, true],
+    ["agent_busy", 409, true],
+  ] as const)("maps the allowlisted %s error without exposing unknown fields", async (code, status, retryable) => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      detail: {
+        code,
+        message: `Safe ${code} message`,
+        retryable,
+        recoveryAction: "Use the documented recovery action.",
+        providerDebugTrace: "must-not-be-mapped",
+      },
+    }, status));
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    const error = await client.createAgentRun(createRequest).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LearningCoreResponseError);
+    expect(error).toMatchObject({
+      status,
+      detail: {
+        code,
+        retryable,
+        recovery: "Use the documented recovery action.",
+      },
+    });
+    expect((error as LearningCoreResponseError).detail).not.toHaveProperty("providerDebugTrace");
+  });
+
+  it("validates interrupted and cancelled terminal run invariants", () => {
+    expect(agentRunSchema.safeParse({
+      ...queuedRun,
+      status: "interrupted",
+      errorCode: "process_restarted",
+      errorDetail: "The learning core restarted.",
+      finishedAt: timestamp,
+    }).success).toBe(true);
+    expect(agentRunSchema.safeParse({ ...queuedRun, status: "cancelled", finishedAt: timestamp }).success).toBe(false);
+    expect(agentRunSchema.safeParse({ ...queuedRun, status: "completed", errorCode: "failed", finishedAt: timestamp }).success).toBe(false);
+  });
+
+  it("keeps request and event schemas strict and bounded", () => {
+    expect(agentRunCreateRequestSchema.safeParse({ ...createRequest, unknown: true }).success).toBe(false);
+    expect(agentRunCreateRequestSchema.safeParse({ ...createRequest, input: { value: Number.NaN } }).success).toBe(false);
+    expect(agentRunEventSchema.safeParse({
+      id: "event-1",
+      type: "checkpoint",
+      data: { label: "private", data: { internalReasoning: "trace" } },
+    }).success).toBe(false);
+  });
+});
+
+describe("LearningCoreClient durable Agent SSE contract", () => {
+  it("parses durable IDs across UTF-8/CRLF boundaries and reaches done", async () => {
+    const wire = [
+      agentSseEvent("event-1", "metadata", {
+        runId: "run-1",
+        provider: "automation",
+        model: "fixed-actions",
+        providerVersion: "v1",
+      }, "\r\n"),
+      agentSseEvent("event-2", "status", { status: "running" }, "\r\n"),
+      agentSseEvent("event-3", "content_delta", { delta: "方向" }, "\r\n"),
+      agentSseEvent("event-4", "status", { status: "completed" }, "\r\n"),
+      agentSseEvent("event-5", "done", { status: "completed" }, "\r\n"),
+    ].join("");
+    const bytes = new TextEncoder().encode(wire);
+    const direction = new TextEncoder().encode("方向");
+    const start = bytes.findIndex((_, index) => direction.every((byte, offset) => bytes[index + offset] === byte));
+    const fetchMock = vi.fn(async () => sseResponse([
+      bytes.slice(0, start + 1),
+      bytes.slice(start + 1, start + 4),
+      bytes.slice(start + 4),
+    ]));
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    const events = [];
+    for await (const event of client.agentRunEvents("run-1")) events.push(event);
+
+    expect(events.map((event) => [event.id, event.type])).toEqual([
+      ["event-1", "metadata"],
+      ["event-2", "status"],
+      ["event-3", "content_delta"],
+      ["event-4", "status"],
+      ["event-5", "done"],
+    ]);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("Accept")).toBe("text/event-stream");
+  });
+
+  it("sends Last-Event-ID or cursor and accepts interrupted/cancelled replay terminals", async () => {
+    const responses = [
+      sseResponse(
+        agentSseEvent("event-3", "status", { status: "interrupted" })
+        + agentSseEvent("event-4", "error", {
+          code: "process_restarted",
+          retryable: false,
+          status: "interrupted",
+          message: "The learning core restarted.",
+        }),
+      ),
+      sseResponse(
+        agentSseEvent("event-8", "status", { status: "cancelled" })
+        + agentSseEvent("event-9", "error", { code: "cancelled", retryable: false, status: "cancelled" }),
+      ),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift() ?? sseResponse(""));
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    const interrupted = [];
+    for await (const event of client.agentRunEvents("run-1", { lastEventId: "event-2" })) interrupted.push(event);
+    const cancelled = [];
+    for await (const event of client.agentRunEvents("run-1", { cursor: "event-7" })) cancelled.push(event);
+
+    expect(interrupted.at(-1)).toMatchObject({ type: "error", data: { status: "interrupted" } });
+    expect(cancelled.at(-1)).toMatchObject({ type: "error", data: { status: "cancelled" } });
+    const [firstUrl, firstInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [secondUrl, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(firstUrl).not.toContain("cursor=");
+    expect(new Headers(firstInit.headers).get("Last-Event-ID")).toBe("event-2");
+    expect(secondUrl.endsWith("/events?cursor=event-7")).toBe(true);
+    expect(new Headers(secondInit.headers).has("Last-Event-ID")).toBe(false);
+  });
+
+  it("returns a safe reconnect signal with the latest durable event ID on early EOF", async () => {
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => sseResponse(agentSseEvent("event-11", "content_delta", { delta: "partial" }))) as unknown as typeof fetch,
+    );
+    const read = async () => {
+      for await (const _event of client.agentRunEvents("run-1", { lastEventId: "event-10" })) void _event;
+    };
+
+    const error = await read().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AgentEventStreamDisconnectedError);
+    expect(error).toMatchObject({ runId: "run-1", lastEventId: "event-11", retryable: true });
+  });
+
+  it("maps a transport read failure to the same safe reconnect signal", async () => {
+    let sent = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode(agentSseEvent("event-12", "status", { status: "running" })));
+          return;
+        }
+        controller.error(new TypeError("transport internals must not escape"));
+      },
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => response) as unknown as typeof fetch,
+    );
+    const read = async () => {
+      for await (const _event of client.agentRunEvents("run-1", { lastEventId: "event-10" })) void _event;
+    };
+
+    const error = await read().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AgentEventStreamDisconnectedError);
+    expect(error).toMatchObject({ runId: "run-1", lastEventId: "event-12", retryable: true });
+    expect((error as Error).message).not.toContain("transport internals");
+  });
+
+  it("rejects conflicting cursors, missing IDs, duplicate IDs, hidden fields, and post-terminal events", async () => {
+    const fetchMock = vi.fn();
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+    const conflict = async () => {
+      for await (const _event of client.agentRunEvents("run-1", { lastEventId: "event-1", cursor: "event-2" })) void _event;
+    };
+    await expect(conflict()).rejects.toBeInstanceOf(LearningCoreRequestError);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const invalidWires = [
+      "event: done\ndata: {\"status\":\"completed\"}\n\n",
+      agentSseEvent("event-1", "status", { status: "running" }) + agentSseEvent("event-1", "done", { status: "completed" }),
+      agentSseEvent("event-1", "checkpoint", { label: "bad", data: { thoughts: "private" } }),
+      agentSseEvent("event-1", "done", { status: "completed" }) + agentSseEvent("event-2", "warning", { code: "late", message: "late" }),
+    ];
+    for (const wire of invalidWires) {
+      const invalidClient = createLearningCoreClient(
+        "http://127.0.0.1:8080",
+        token,
+        vi.fn(async () => sseResponse(wire)) as unknown as typeof fetch,
+      );
+      const read = async () => {
+        for await (const _event of invalidClient.agentRunEvents("run-1")) void _event;
+      };
+      await expect(read()).rejects.toBeInstanceOf(LearningCoreSchemaError);
+    }
+
+    const duplicateCursorClient = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => sseResponse(agentSseEvent("event-7", "done", { status: "completed" }))) as unknown as typeof fetch,
+    );
+    const duplicateCursorRead = async () => {
+      for await (const _event of duplicateCursorClient.agentRunEvents("run-1", { lastEventId: "event-7" })) void _event;
+    };
+    await expect(duplicateCursorRead()).rejects.toBeInstanceOf(LearningCoreSchemaError);
+  });
+});

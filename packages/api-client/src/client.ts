@@ -1,5 +1,15 @@
 import { z, type ZodType } from "zod";
 import {
+  agentCancelResponseSchema,
+  agentRunCreateRequestSchema,
+  agentRunEventSchema,
+  agentRunSchema,
+  type AgentCancelResponse,
+  type AgentRun,
+  type AgentRunCreateRequest,
+  type AgentRunEvent,
+} from "./agentSchemas";
+import {
   answerStreamEventSchema,
   demoStateSchema,
   documentCourseLinkResponseSchema,
@@ -54,6 +64,29 @@ export class LearningCoreSchemaError extends Error {
   }
 }
 
+export class LearningCoreRequestError extends Error {
+  readonly path: string;
+
+  constructor(path: string) {
+    super(`The request for ${path} does not match the learning-core contract.`);
+    this.name = "LearningCoreRequestError";
+    this.path = path;
+  }
+}
+
+export class AgentEventStreamDisconnectedError extends Error {
+  readonly runId: string;
+  readonly lastEventId: string | null;
+  readonly retryable = true;
+
+  constructor(runId: string, lastEventId: string | null) {
+    super("The Agent event stream disconnected before a terminal event. Reconnect using lastEventId.");
+    this.name = "AgentEventStreamDisconnectedError";
+    this.runId = runId;
+    this.lastEventId = lastEventId;
+  }
+}
+
 export class LearningCoreDocumentContentError extends Error {
   readonly reason: "non_pdf" | "too_large" | "invalid_body";
 
@@ -70,6 +103,10 @@ export class LearningCoreDocumentContentError extends Error {
 }
 
 export type RequestOptions = { signal?: AbortSignal };
+export type AgentRunEventStreamOptions = RequestOptions & {
+  lastEventId?: string;
+  cursor?: string;
+};
 export type SearchRequest = { query: string; courseId?: string | null; limit?: number };
 export type GroundedQueryRequest = SearchRequest;
 export type AnswerStreamRequest = {
@@ -92,7 +129,10 @@ export type LearningCoreErrorDetail = {
   retryable: boolean | null;
   recovery: string | null;
   documentId: string | null;
+  code: "provider_missing" | "provider_unavailable" | "agent_busy" | null;
 };
+
+const agentResponseErrorCodeSchema = z.enum(["provider_missing", "provider_unavailable", "agent_busy"]);
 
 const errorEnvelopeSchema = z.object({
   detail: z.union([
@@ -101,7 +141,9 @@ const errorEnvelopeSchema = z.object({
       message: z.string().min(1).max(4_000),
       retryable: z.boolean().optional(),
       recovery: z.string().min(1).max(4_000).optional(),
+      recoveryAction: z.string().min(1).max(4_000).optional(),
       documentId: z.string().min(1).max(240).nullable().optional(),
+      code: z.string().min(1).max(80).optional(),
     }).passthrough(),
   ]),
 }).passthrough();
@@ -141,13 +183,15 @@ async function parseErrorResponse(response: Response): Promise<LearningCoreError
   const parsed = errorEnvelopeSchema.safeParse(value);
   if (!parsed.success) return null;
   if (typeof parsed.data.detail === "string") {
-    return { message: parsed.data.detail, retryable: null, recovery: null, documentId: null };
+    return { message: parsed.data.detail, retryable: null, recovery: null, documentId: null, code: null };
   }
+  const code = agentResponseErrorCodeSchema.safeParse(parsed.data.detail.code);
   return {
     message: parsed.data.detail.message,
     retryable: parsed.data.detail.retryable ?? null,
-    recovery: parsed.data.detail.recovery ?? null,
+    recovery: parsed.data.detail.recovery ?? parsed.data.detail.recoveryAction ?? null,
     documentId: parsed.data.detail.documentId ?? null,
+    code: code.success ? code.data : null,
   };
 }
 
@@ -164,6 +208,7 @@ async function assertExpectedStatus(
         retryable: null,
         recovery: null,
         documentId: null,
+        code: null,
       }
     : await parseErrorResponse(response);
   throw new LearningCoreResponseError(response.status, detail, requestId);
@@ -203,6 +248,12 @@ function validateBaseUrl(baseUrl: string): string {
 function assertToken(token: string): void {
   if (token.length < 32 || /[\r\n]/.test(token)) {
     throw new TypeError("A learning-core session token of at least 32 characters is required.");
+  }
+}
+
+function assertAgentIdentifier(value: string, path: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
+    throw new LearningCoreRequestError(path);
   }
 }
 
@@ -391,6 +442,101 @@ export class LearningCoreClient {
     });
   }
 
+  createAgentRun(request: AgentRunCreateRequest, options: RequestOptions = {}): Promise<AgentRun> {
+    const parsed = agentRunCreateRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError("/v1/agent/runs");
+    return this.#request("/v1/agent/runs", agentRunSchema, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed.data),
+      signal: options.signal,
+    }, { expectedStatuses: [202] });
+  }
+
+  getAgentRun(runId: string, options: RequestOptions = {}): Promise<AgentRun> {
+    assertAgentIdentifier(runId, "/v1/agent/runs/{id}");
+    return this.#request(`/v1/agent/runs/${encodeURIComponent(runId)}`, agentRunSchema, options);
+  }
+
+  cancelAgentRun(runId: string, options: RequestOptions = {}): Promise<AgentCancelResponse> {
+    assertAgentIdentifier(runId, "/v1/agent/runs/{id}/cancel");
+    return this.#request(
+      `/v1/agent/runs/${encodeURIComponent(runId)}/cancel`,
+      agentCancelResponseSchema,
+      { method: "POST", signal: options.signal },
+    );
+  }
+
+  async *agentRunEvents(
+    runId: string,
+    options: AgentRunEventStreamOptions = {},
+  ): AsyncGenerator<AgentRunEvent> {
+    const path = "/v1/agent/runs/{id}/events";
+    assertAgentIdentifier(runId, path);
+    if (options.lastEventId !== undefined) assertAgentIdentifier(options.lastEventId, path);
+    if (options.cursor !== undefined) assertAgentIdentifier(options.cursor, path);
+    if (
+      options.lastEventId !== undefined
+      && options.cursor !== undefined
+      && options.lastEventId !== options.cursor
+    ) {
+      throw new LearningCoreRequestError(path);
+    }
+    const query = options.cursor === undefined ? "" : `?cursor=${encodeURIComponent(options.cursor)}`;
+    const headers = new Headers({
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${this.#token}`,
+    });
+    if (options.lastEventId !== undefined) headers.set("Last-Event-ID", options.lastEventId);
+    const response = await this.#fetch(
+      `${this.baseUrl}/v1/agent/runs/${encodeURIComponent(runId)}/events${query}`,
+      { headers, signal: options.signal },
+    );
+    await assertExpectedStatus(response, path, [200]);
+    const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (mediaType !== "text/event-stream" || !response.body) throw new LearningCoreSchemaError(path);
+
+    let terminal = false;
+    let lastEventId = options.lastEventId ?? options.cursor ?? null;
+    const resumeAfterId = lastEventId;
+    const receivedIds = new Set<string>();
+    try {
+      for await (const record of parseServerSentEvents(response.body, path)) {
+        if (
+          terminal
+          || record.id === null
+          || record.id === resumeAfterId
+          || receivedIds.has(record.id)
+        ) {
+          throw new LearningCoreSchemaError(path);
+        }
+        let data: unknown;
+        try {
+          data = JSON.parse(record.data);
+        } catch {
+          throw new LearningCoreSchemaError(path);
+        }
+        const parsed = agentRunEventSchema.safeParse({ id: record.id, type: record.event, data });
+        if (!parsed.success) throw new LearningCoreSchemaError(path);
+        const event = parsed.data;
+        if (event.type === "metadata" && event.data.runId !== runId) throw new LearningCoreSchemaError(path);
+        if (event.type === "done" || event.type === "error") terminal = true;
+        receivedIds.add(event.id);
+        lastEventId = event.id;
+        yield event;
+      }
+    } catch (error) {
+      if (
+        error instanceof LearningCoreSchemaError
+        || (error instanceof Error && error.name === "AbortError")
+      ) {
+        throw error;
+      }
+      throw new AgentEventStreamDisconnectedError(runId, lastEventId);
+    }
+    if (!terminal) throw new AgentEventStreamDisconnectedError(runId, lastEventId);
+  }
+
   async *answerStream(
     request: AnswerStreamRequest,
     options: RequestOptions = {},
@@ -420,7 +566,7 @@ export class LearningCoreClient {
     let runId: string | null = null;
     const sources = new Map<number, Extract<AnswerStreamEvent, { type: "retrieval" }>["data"]["chunks"][number]>();
     const citationIds = new Set<string>();
-    for await (const record of parseServerSentEvents(response.body)) {
+    for await (const record of parseServerSentEvents(response.body, "/v1/answer/stream")) {
       let data: unknown;
       try {
         data = JSON.parse(record.data);
@@ -497,16 +643,20 @@ export class LearningCoreClient {
   }
 }
 
-type SseRecord = { event: string; data: string };
+type SseRecord = { id: string | null; event: string; data: string };
 const MAX_SSE_BUFFER_BYTES = 1024 * 1024;
 const MAX_SSE_STREAM_BYTES = 8 * 1024 * 1024;
 
-async function* parseServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<SseRecord> {
+async function* parseServerSentEvents(
+  body: ReadableStream<Uint8Array>,
+  path: string,
+): AsyncGenerator<SseRecord> {
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let totalBytes = 0;
   let eventBytes = 0;
+  let eventId: string | null = null;
   let eventName: string | null = null;
   let dataLines: string[] = [];
   let finishedReading = false;
@@ -514,14 +664,15 @@ async function* parseServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGe
   const consumeLine = (lineWithPossibleCr: string): SseRecord | null => {
     const line = lineWithPossibleCr.endsWith("\r") ? lineWithPossibleCr.slice(0, -1) : lineWithPossibleCr;
     eventBytes += new TextEncoder().encode(line).byteLength + 1;
-    if (eventBytes > MAX_SSE_BUFFER_BYTES) throw new LearningCoreSchemaError("/v1/answer/stream");
+    if (eventBytes > MAX_SSE_BUFFER_BYTES) throw new LearningCoreSchemaError(path);
     if (line === "") {
       if (eventName === null && dataLines.length === 0) {
         eventBytes = 0;
         return null;
       }
-      if (eventName === null || dataLines.length === 0) throw new LearningCoreSchemaError("/v1/answer/stream");
-      const record = { event: eventName, data: dataLines.join("\n") };
+      if (eventName === null || dataLines.length === 0) throw new LearningCoreSchemaError(path);
+      const record = { id: eventId, event: eventName, data: dataLines.join("\n") };
+      eventId = null;
       eventName = null;
       dataLines = [];
       eventBytes = 0;
@@ -532,6 +683,10 @@ async function* parseServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGe
     const field = separator < 0 ? line : line.slice(0, separator);
     let value = separator < 0 ? "" : line.slice(separator + 1);
     if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "id" && eventId === null && value) {
+      eventId = value;
+      return null;
+    }
     if (field === "event" && eventName === null && value) {
       eventName = value;
       return null;
@@ -540,7 +695,7 @@ async function* parseServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGe
       dataLines.push(value);
       return null;
     }
-    throw new LearningCoreSchemaError("/v1/answer/stream");
+    throw new LearningCoreSchemaError(path);
   };
 
   try {
@@ -551,18 +706,18 @@ async function* parseServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGe
         break;
       }
       totalBytes += value.byteLength;
-      if (totalBytes > MAX_SSE_STREAM_BYTES) throw new LearningCoreSchemaError("/v1/answer/stream");
+      if (totalBytes > MAX_SSE_STREAM_BYTES) throw new LearningCoreSchemaError(path);
       try {
         buffer += decoder.decode(value, { stream: true });
       } catch {
-        throw new LearningCoreSchemaError("/v1/answer/stream");
+        throw new LearningCoreSchemaError(path);
       }
       let lineEnd = buffer.indexOf("\n");
       while (lineEnd >= 0) {
         const line = buffer.slice(0, lineEnd);
         buffer = buffer.slice(lineEnd + 1);
         if (new TextEncoder().encode(buffer).byteLength > MAX_SSE_BUFFER_BYTES) {
-          throw new LearningCoreSchemaError("/v1/answer/stream");
+          throw new LearningCoreSchemaError(path);
         }
         const record = consumeLine(line);
         if (record) yield record;
@@ -572,7 +727,7 @@ async function* parseServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGe
     try {
       buffer += decoder.decode();
     } catch {
-      throw new LearningCoreSchemaError("/v1/answer/stream");
+      throw new LearningCoreSchemaError(path);
     }
     if (buffer !== "") {
       const record = consumeLine(buffer);
