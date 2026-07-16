@@ -140,8 +140,10 @@ Every JSON text column must pass Pydantic/Zod validation at the boundary and `js
 Status: **in progress**. Persistence repositories plus the typed registry,
 permission/effect checks, bounded tool contracts, cancellable single-step
 executor, atomic Level 2 transaction handoff, typed inverse mutation and
-redacted audit boundary are verified as a foundation. SQLite AuditSink
-integration, replay/idempotency, Undo execution, registered product tools,
+redacted audit boundary are verified as a foundation. Initial typed product
+tools can read real Study Feed and due-Review rows, complete a course-scoped
+Study Task inside the caller transaction, and keep export at unavailable Level
+3. SQLite AuditSink integration, replay/idempotency, Undo execution,
 orchestrator, SSE/reconnect, UI and provider integration remain `not started`.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
@@ -367,6 +369,11 @@ content leaking into audit, disguised hidden-reasoning keys, non-executable Undo
 payloads, and loss of raw typed mutations at the persistence boundary. Replay,
 real SQLite audit integration, Undo execution, orchestration and SSE remain
 explicitly unverified, so Gate 3 is not complete.
+
+The initial product-tool subset passed 6/6 focused tests against real SQLite
+rows, including course scoping, UTC validation, transaction rollback and typed
+Undo output. It is a bounded integration slice, not evidence that all tool
+groups or the orchestrator are complete.
 
 ### Gate 4 — durable Conversation and Deep Learn
 
