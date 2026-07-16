@@ -587,15 +587,14 @@ export class LearningCoreClient {
     const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     if (mediaType !== "text/event-stream" || !response.body) throw new LearningCoreSchemaError(path);
 
-    let terminal = false;
+    let terminalSeen = false;
     let lastEventId = options.lastEventId ?? options.cursor ?? null;
     const resumeAfterId = lastEventId;
     const receivedIds = new Set<string>();
     try {
       for await (const record of parseServerSentEvents(response.body, path)) {
         if (
-          terminal
-          || record.id === null
+          record.id === null
           || record.id === resumeAfterId
           || receivedIds.has(record.id)
         ) {
@@ -611,7 +610,7 @@ export class LearningCoreClient {
         if (!parsed.success) throw new LearningCoreSchemaError(path);
         const event = parsed.data;
         if (event.type === "metadata" && event.data.runId !== runId) throw new LearningCoreSchemaError(path);
-        if (event.type === "done" || event.type === "error") terminal = true;
+        if (event.type === "done" || event.type === "error") terminalSeen = true;
         receivedIds.add(event.id);
         lastEventId = event.id;
         yield event;
@@ -625,7 +624,7 @@ export class LearningCoreClient {
       }
       throw new AgentEventStreamDisconnectedError(runId, lastEventId);
     }
-    if (!terminal) throw new AgentEventStreamDisconnectedError(runId, lastEventId);
+    if (!terminalSeen) throw new AgentEventStreamDisconnectedError(runId, lastEventId);
   }
 
   async *answerStream(

@@ -407,6 +407,49 @@ describe("LearningCoreClient durable Agent SSE contract", () => {
     expect(error).toMatchObject({ runId: "run-1", lastEventId: "event-11", retryable: true });
   });
 
+  it("accepts durable Undo audit events appended after the original terminal event", async () => {
+    const wire = [
+      agentSseEvent("event-done", "done", { status: "completed" }),
+      agentSseEvent("event-tool-start", "tool_start", {
+        invocationId: "invocation-undo-1",
+        toolName: "undo_state_mutation",
+        replayCandidate: false,
+      }),
+      agentSseEvent("event-tool-result", "tool_result", {
+        callId: "call-undo-1",
+        invocationId: "invocation-undo-1",
+        toolName: "undo_state_mutation",
+        result: { mutationId: "mutation-inverse-1" },
+        truncated: false,
+        replayed: false,
+      }),
+      agentSseEvent("event-mutation", "state_mutation", {
+        callId: "call-undo-1",
+        invocationId: "invocation-undo-1",
+        mutationId: "mutation-inverse-1",
+        entityType: "study_task",
+        entityId: "task-1",
+        operation: "update",
+        reversible: true,
+      }),
+    ].join("");
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => sseResponse(wire)) as unknown as typeof fetch,
+    );
+
+    const events = [];
+    for await (const event of client.agentRunEvents("run-1")) events.push(event);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "done",
+      "tool_start",
+      "tool_result",
+      "state_mutation",
+    ]);
+  });
+
   it("maps a transport read failure to the same safe reconnect signal", async () => {
     let sent = false;
     const response = new Response(new ReadableStream<Uint8Array>({
@@ -434,7 +477,7 @@ describe("LearningCoreClient durable Agent SSE contract", () => {
     expect((error as Error).message).not.toContain("transport internals");
   });
 
-  it("rejects conflicting cursors, missing IDs, duplicate IDs, hidden fields, and post-terminal events", async () => {
+  it("rejects conflicting cursors, missing IDs, duplicate IDs, and hidden fields", async () => {
     const fetchMock = vi.fn();
     const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
     const conflict = async () => {
@@ -447,7 +490,6 @@ describe("LearningCoreClient durable Agent SSE contract", () => {
       "event: done\ndata: {\"status\":\"completed\"}\n\n",
       agentSseEvent("event-1", "status", { status: "running" }) + agentSseEvent("event-1", "done", { status: "completed" }),
       agentSseEvent("event-1", "checkpoint", { label: "bad", data: { thoughts: "private" } }),
-      agentSseEvent("event-1", "done", { status: "completed" }) + agentSseEvent("event-2", "warning", { code: "late", message: "late" }),
     ];
     for (const wire of invalidWires) {
       const invalidClient = createLearningCoreClient(
