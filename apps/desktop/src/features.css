@@ -19,6 +19,10 @@
 .prompt-grid > button:hover { border-color: rgba(111,143,247,.3); background: var(--surface-primary); }
 .prompt-grid > button > span { min-width: 0; flex: 1; font-size: 10px; line-height: 1.35; }
 .prompt-grid strong { display: block; margin-bottom: 3px; color: var(--text-primary); font-size: 11px; }
+.agent-home-activity { display: grid; gap: 10px; margin: -18px 0 34px; }
+.agent-runtime-issue { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid rgba(215,90,90,.16); border-radius: 9px; background: rgba(215,90,90,.05); }
+.agent-runtime-issue strong { color: var(--danger); font-size: 10px; }
+.agent-runtime-issue span { color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
 .home-section { margin-top: 26px; }
 .home-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .home-section-head > div { display: flex; align-items: center; gap: 7px; }
