@@ -110,6 +110,7 @@ export type RequestOptions = { signal?: AbortSignal };
 export type AgentRunEventStreamOptions = RequestOptions & {
   lastEventId?: string;
   cursor?: string;
+  terminalAlreadySeen?: boolean;
 };
 export type SearchRequest = { query: string; courseId?: string | null; limit?: number };
 export type GroundedQueryRequest = SearchRequest;
@@ -624,7 +625,9 @@ export class LearningCoreClient {
       }
       throw new AgentEventStreamDisconnectedError(runId, lastEventId);
     }
-    if (!terminalSeen) throw new AgentEventStreamDisconnectedError(runId, lastEventId);
+    if (!terminalSeen && !options.terminalAlreadySeen) {
+      throw new AgentEventStreamDisconnectedError(runId, lastEventId);
+    }
   }
 
   async *answerStream(

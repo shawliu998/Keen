@@ -452,6 +452,37 @@ describe("LearningCoreClient durable Agent SSE contract", () => {
     ]);
   });
 
+  it("accepts a post-terminal resume batch only with explicit terminal history", async () => {
+    const auditOnly = agentSseEvent("event-audit-1", "state_mutation", {
+      invocationId: "invocation-undo-1",
+      mutationId: "mutation-inverse-1",
+      entityType: "study_task",
+      entityId: "task-1",
+      operation: "update",
+      reversible: true,
+      action: "undo",
+      targetMutationId: "mutation-original-1",
+      replayed: false,
+    });
+    const makeClient = () => createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => sseResponse(auditOnly)) as unknown as typeof fetch,
+    );
+    const withoutHistory = async () => {
+      for await (const _event of makeClient().agentRunEvents("run-1", { lastEventId: "event-done" })) void _event;
+    };
+    await expect(withoutHistory()).rejects.toBeInstanceOf(AgentEventStreamDisconnectedError);
+
+    const events = [];
+    for await (const event of makeClient().agentRunEvents("run-1", {
+      lastEventId: "event-done",
+      terminalAlreadySeen: true,
+    })) events.push(event);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "state_mutation", data: { action: "undo" } });
+  });
+
   it("maps a transport read failure to the same safe reconnect signal", async () => {
     let sent = false;
     const response = new Response(new ReadableStream<Uint8Array>({
