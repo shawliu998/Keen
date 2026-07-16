@@ -27,7 +27,11 @@ class TerminalInvocationError(RuntimeError):
     """A failed/cancelled/denied invocation cannot be silently re-executed."""
 
 
-def _mutation_id(invocation_id: str, ordinal: int) -> str:
+def mutation_id_for_invocation(invocation_id: str, ordinal: int) -> str:
+    """Return the stable public identity shared by audit and event adapters."""
+
+    if ordinal < 0:
+        raise ValueError("mutation ordinal must be non-negative")
     digest = hashlib.sha256(f"{invocation_id}:{ordinal}".encode()).hexdigest()
     return f"mutation-{digest}"
 
@@ -254,7 +258,7 @@ class SQLiteAuditSink(AuditSink):
         for ordinal, mutation in enumerate(mutations):
             inputs.append(
                 {
-                    "id": _mutation_id(record.invocation_id, ordinal),
+                    "id": mutation_id_for_invocation(record.invocation_id, ordinal),
                     "entity_type": mutation.entity_type,
                     "entity_id": mutation.entity_id,
                     "operation": mutation.operation,

@@ -55,9 +55,9 @@ Status: **in progress**. The document/import/retrieval/citation portions exist; 
 | Quiz | Three bundled single-choice questions scored in React state | `not started`; no assessment records or mastery/review mutation |
 | Flashcards | Bundled sample cards and in-memory ratings | `not started`; FSRS is not connected |
 | Learning Feed | Real `/v1/demo-state` task/mastery read with no live mutation | `in progress`; candidate generation, rationale and actions are `not started` |
-| Agent | Answer service can retrieve and stream content | `not started` for orchestrator, typed tools, run/step/tool/mutation audit and approvals |
+| Agent | Authenticated create/get/cancel/SSE run API over a durable single-Agent orchestrator, typed tools and audited mutations | `in progress`; real provider, Undo HTTP, frontend consumption and remaining tool groups are open |
 | Mastery | Deterministic BKT accepts only `concept_id` + boolean correctness and writes a basic event | `in progress`; evidence weighting, traceability and algorithm version are `not started` |
-| Recovery | Index-job and sidecar recovery exist | `not started` for conversation/session/attempt/review/Agent recovery |
+| Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery exist | `in progress`; kill-restart/socket E2E and conversation/session/attempt/review recovery remain open |
 
 ## Existing data model
 
@@ -84,8 +84,9 @@ The current `app/main.py` exposes:
 - tasks/mastery: `GET/POST /v1/tasks`, `PATCH /v1/tasks/{id}`, `GET /v1/mastery`, `POST /v1/mastery/attempts`;
 - documents/jobs: import/list/content, course link/unlink, job list/get/cancel, retry/reindex/delete;
 - retrieval: `POST /v1/search`, deterministic `POST /v1/query`, and generated `POST /v1/answer/stream` SSE.
+- Agent: authenticated `POST /v1/agent/runs`, `GET /v1/agent/runs/{run_id}`, `POST /v1/agent/runs/{run_id}/cancel`, and durable `GET /v1/agent/runs/{run_id}/events` SSE.
 
-All routes inherit existing sidecar Bearer authentication and request guards. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, Agent run, study-session, assessment, misconception, review or explainable Feed API exists yet.
+All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation is capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet, and the Agent API has no Undo HTTP resource or frontend client.
 
 ## Reusable modules and required boundaries
 
@@ -154,9 +155,12 @@ idempotency keys, commits Level 2 writes with typed mutation records, reconciles
 uncertain commits, replays completed invocations without repeating writes and
 executes allowlisted Study Task Undo/redo. Its restricted tool session exposes
 only `study_tasks` SELECT/UPDATE and denies transaction control or cross-table
-access. FastAPI routes, process-restart provider continuation, UI, visible Undo
-controls, remaining tool groups and real provider selection remain
-`not started`.
+access. Authenticated FastAPI create/get/cancel/SSE routes now expose this
+runtime. They use an app-scoped background-owned audit connection, emit a real
+`mutationId` for normal Level 2 mutation events, preserve cursor replay, and
+default to truthful `provider_missing` behavior rather than automation.
+Process-restart provider continuation, UI, visible Undo controls, remaining
+tool groups and real provider selection remain `not started`.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
 
@@ -294,7 +298,8 @@ Actions are Start, Complete, Snooze, Reschedule, Too easy, Too hard and Not rele
 
 ## API and streaming contract
 
-Status: **not started** for these additions.
+Status: **in progress**. The Agent create/get/cancel/events resource is
+implemented; the other learning-loop resources below remain `not started`.
 
 Add separate routers/services/repositories for conversations, Agent, study sessions, assessments, mastery, reviews and learning Feed. Minimum resource APIs:
 
@@ -311,11 +316,12 @@ All routes retain sidecar authentication. All frontend responses are Zod-validat
 
 ## Cancellation, recovery and concurrency
 
-Status: **not started** for learning-loop operations.
+Status: **in progress** for Agent cancellation and startup terminal recovery;
+the other learning-loop operations remain `not started`.
 
 Agent runs, session generation, Quiz generation, subjective grading and flashcard generation propagate cancellation from frontend `AbortController`, through disconnect-aware FastAPI tasks, to provider cancellation. An incomplete operation never writes a false completion. Completed reversible mutations remain audited.
 
-Startup recovery marks active Agent streams interrupted, pauses affected sessions, preserves submitted attempts/evaluations, restores current Quiz item and does not duplicate Review schedules or tool invocations. Unsubmitted answer drafts require a deliberate persistence policy and must be scoped to their attempt/session. Session and attempt revisions reject stale concurrent writes. Listener cleanup and React Query keys include the sidecar generation so a restart cannot reuse invalid endpoint state.
+Startup recovery now idempotently marks active Agent runs/steps/tools/approvals terminal and appends durable interrupted/error terminal events from the background-owned database transaction; it does not resume provider execution. Pausing affected sessions, preserving submitted attempts/evaluations, restoring the current Quiz item and avoiding duplicate Review schedules still require implementation and E2E evidence. Unsubmitted answer drafts require a deliberate persistence policy and must be scoped to their attempt/session. Session and attempt revisions reject stale concurrent writes. Listener cleanup and React Query keys include the sidecar generation so a restart cannot reuse invalid endpoint state.
 
 ## Frontend integration and truthful states
 
@@ -403,9 +409,21 @@ restart replay, cancellation/rollback, transaction and cursor escape attempts,
 cross-table SQL, forged/combined Undo tracking, REPLACE and cascade deletion.
 The restricted session currently supports only `study_tasks` SELECT/UPDATE;
 new Level 2 domains require explicit capability and negative-test expansion.
-FastAPI Agent routes, process-restart provider continuation, visible frontend
-Undo, real provider selection and the remaining product tool groups are still
-open, so Gate 3 remains in progress.
+Process-restart provider continuation, Undo HTTP and visible frontend Undo,
+real provider selection and the remaining product tool groups are still open,
+so Gate 3 remains in progress.
+
+The authenticated Agent API slice now implements run create/get/cancel and
+durable SSE events. It prevalidates replay cursors, keeps execution and its
+SQLite audit connection app-scoped rather than request-owned, writes
+idempotent startup interruption/error terminal events, exposes the normal
+Level 2 mutation's real `mutationId`, applies the shared 64 KiB JSON guard, and
+defaults to `provider_missing` when no real provider is configured. Independent
+verification passed the full Python suite 566/566 and the related subset
+105/105; the execution window additionally passed an expanded 113/113 focused
+subset. Ruff lint, Ruff format and `git diff --check` passed. A real provider,
+Undo HTTP resource, strict TypeScript API client/Agent activity UI, and actual
+kill-restart/socket E2E remain open, so this evidence does not close Gate 3.
 
 ### Gate 4 — durable Conversation and Deep Learn
 

@@ -19,6 +19,7 @@ from .sqlite_audit import (
     InFlightInvocationError,
     SQLiteAuditSink,
     TerminalInvocationError,
+    mutation_id_for_invocation,
 )
 from .transaction import LocalWriteSession, SQLiteToolResult, SQLiteToolSession
 from .types import (
@@ -77,5 +78,6 @@ __all__ = [
     "UndoRegistry",
     "UntrustedDocument",
     "default_undo_registry",
+    "mutation_id_for_invocation",
     "summarize_for_audit",
 ]

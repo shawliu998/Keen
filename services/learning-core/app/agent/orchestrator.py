@@ -11,6 +11,7 @@ from .audit import summarize_for_audit
 from .event_stream import AgentEventStore
 from .provider import (
     AgentProvider,
+    close_provider_safely,
     ContentDelta,
     ProviderAction,
     ProviderCheckpoint,
@@ -20,6 +21,7 @@ from .provider import (
     ProviderWarning,
     ToolCall,
 )
+from .sqlite_audit import mutation_id_for_invocation
 from .types import ToolContext, ToolReplayResult, ToolResult
 
 _MAX_PROVIDER_ACTIONS = 1_000
@@ -140,8 +142,7 @@ class AgentOrchestrator:
                 error_detail=_safe_error_detail(error),
             )
         finally:
-            with contextlib.suppress(Exception):
-                await self._provider.aclose()
+            await close_provider_safely(self._provider)
             async with self._active_lock:
                 self._active.pop(run_id, None)
 
@@ -264,12 +265,15 @@ class AgentOrchestrator:
                     {
                         "callId": action.call_id,
                         "invocationId": invocation_id,
+                        "mutationId": mutation_id_for_invocation(
+                            invocation_id, ordinal
+                        ),
                         "entityType": mutation.entity_type,
                         "entityId": mutation.entity_id,
                         "operation": mutation.operation,
                         "reversible": True,
                     }
-                    for mutation in result.mutations
+                    for ordinal, mutation in enumerate(result.mutations)
                 ]
             self._event_store.complete_tool_step(
                 run_id=run_id,

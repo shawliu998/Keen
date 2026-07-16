@@ -15,7 +15,9 @@ AsgiApp = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]
 
 MULTIPART_ENVELOPE_BYTES = 1024 * 1024
 SMALL_JSON_REQUEST_BYTES = 64 * 1024
-BOUNDED_JSON_PATHS = frozenset({"/v1/answer/stream", "/v1/search", "/v1/query"})
+BOUNDED_JSON_PATHS = frozenset(
+    {"/v1/agent/runs", "/v1/answer/stream", "/v1/search", "/v1/query"}
+)
 
 
 class _RequestBodyTooLarge(Exception):

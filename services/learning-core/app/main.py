@@ -55,6 +55,7 @@ from .instance_lock import hold_database_instance_lock
 from .knowledge_state import enrich_document_knowledge_state
 from .repository import LearningRepository
 from .request_guard import RequestGuardMiddleware
+from .routers.agent_runs import router as agent_runs_router
 from .retrieval_service import (
     HybridRetrievalService,
     ProviderFactory,
@@ -84,6 +85,7 @@ from .schemas import (
     TaskUpdate,
 )
 from .settings import Settings
+from .services.agent_runtime import AgentProviderFactory, AgentRuntimeManager
 from .retrieval_interfaces import EmbeddingModel
 from .storage_reconciliation import (
     StoredFileDeleteError,
@@ -119,6 +121,7 @@ def create_app(
     startup_phase_reporter: StartupPhaseReporter | None = None,
     embedding_provider_factory: ProviderFactory | None = None,
     chat_provider_factory: ChatProviderFactory | None = None,
+    agent_provider_factory: AgentProviderFactory | None = None,
 ) -> FastAPI:
     report_startup_phase = startup_phase_reporter or (lambda _phase: None)
 
@@ -130,6 +133,7 @@ def create_app(
             applied = app.state.database.migrate()
 
             report_startup_phase("recovering")
+            interrupted_agent_runs = app.state.agent_runtime.recover_interrupted_runs()
             ensure_private_directory(settings.document_data_path)
             with app.state.database.connection() as connection:
                 interrupted_jobs = IndexJobRepository(connection).interrupt_active_jobs(
@@ -156,6 +160,7 @@ def create_app(
                     "migrations_applied": applied,
                     "interrupted_imports_recovered": len(recovered),
                     "interrupted_jobs_recovered": len(interrupted_jobs),
+                    "interrupted_agent_runs_recovered": len(interrupted_agent_runs),
                     "temporary_uploads_removed": incoming_removed,
                     "storage_reconciliation": reconciliation,
                 },
@@ -164,6 +169,7 @@ def create_app(
             try:
                 yield
             finally:
+                await app.state.agent_runtime.shutdown()
                 worker_stopped = worker.stop()
                 with app.state.database.connection() as connection:
                     interrupted_on_shutdown = IndexJobRepository(
@@ -188,6 +194,10 @@ def create_app(
     )
     app.state.settings = settings
     app.state.database = Database(settings.database_path)
+    app.state.agent_runtime = AgentRuntimeManager(
+        app.state.database,
+        provider_factory=agent_provider_factory,
+    )
     app.state.document_import_lock = threading.Lock()
     app.state.document_processing_lock = threading.Lock()
     app.state.embedding_provider_factory = (
@@ -247,7 +257,13 @@ def create_app(
         ],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "Content-Type", "Range", "X-Request-ID"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Last-Event-ID",
+            "Range",
+            "X-Request-ID",
+        ],
         expose_headers=["Accept-Ranges", "Content-Range", "X-Request-ID"],
     )
 
@@ -256,6 +272,8 @@ def create_app(
         return HealthResponse(
             status="ok", service="keen-learning-core", version=__version__
         )
+
+    app.include_router(agent_runs_router)
 
     @app.get("/v1/courses", response_model=list[Course])
     def list_courses(repository: LearningRepository = Depends(_repository)):

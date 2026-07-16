@@ -2,7 +2,7 @@
 
 ## Current gate
 
-At the initial 2026-07-15 audit, `references/` did not exist. There are no authorized screenshots, recordings, Figma exports, or brand assets to measure. No page can currently be described as pixel-matched, and no `<3%` mismatch result can be computed.
+At the initial 2026-07-15 audit, `references/` did not exist. The canonical authorization scope is now recorded at `references/authorized-scope.md`, but there are still no accepted HyperKnow screenshots, recordings, Figma exports, or brand assets to measure. No page can currently be described as pixel-matched, and no `<3%` mismatch result can be computed.
 
 The product may proceed with the brief's provisional tokens and non-branded placeholders. Those values must remain identifiable as provisional until measured from authorized references.
 
@@ -10,11 +10,13 @@ The product may proceed with the brief's provisional tokens and non-branded plac
 
 Resolve these before copying any protected visual asset:
 
-- [ ] Supply one canonical authorization document. The brief names both `references/authorized-scope.md` and `references/notes/authorized-scope.md`.
+- [x] Supply one canonical authorization document. `references/authorized-scope.md` is the canonical path; the notes-path variant is noncanonical.
 - [ ] List every allowed screenshot, recording, Figma export, icon, illustration, logo, and Orbie asset.
 - [ ] State allowed use: inspect only, derive measurements, modify, redistribute in source, and/or redistribute in built artifacts.
 - [ ] Record prohibited pages/assets and any attribution or expiration conditions.
 - [ ] Ensure no authenticated-page scraping or competitor-private asset enters `references/`.
+
+2026-07-16 authorization note: the canonical scope is present. The in-app browser plugin could not initialize because its client attempted to redefine a non-configurable runtime `process` property. No HyperKnow page screenshot or visual element has been captured, accepted into the manifest, or used for a parity claim.
 
 ## Missing page references
 
@@ -58,13 +60,13 @@ Status on 2026-07-16: **in progress** at the milestone level; the following live
 | Flashcards | Bundled sample deck; rating remains in UI state and edit is disabled | real due/empty/front/back/source/edit/delete/error states and Again/Hard/Good/Easy schedule results |
 | Learning Feed | Live task/mastery rows are displayed read-only | deterministic rationale breakdown, Start/Complete/Snooze/Reschedule/feedback, mutation rollback and Session create/resume |
 
-No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: the repository still has neither the canonical authorized-scope document nor authorized HyperKnow screenshots/assets. Continue only with provisional non-branded design values, and do not copy protected brand assets or claim parity.
+No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: canonical authorization is present, but no authorized HyperKnow screenshot/asset has been captured and accepted into the manifest. Continue only with provisional non-branded design values, and do not copy protected brand assets or claim parity.
 
 2026-07-16 learning-loop Gate 3 note: backend product tools can now read Study
 Feed/due Review rows and complete a Study Task transactionally. The
 provider-neutral orchestrator persists durable events and supports SSE cursor
-replay at the service layer, but no Agent route or frontend surface consumes
-that stream. Therefore the visual rows above remain `not started`; no
+replay through authenticated create/get/cancel/events routes, but no frontend
+surface consumes that stream. Therefore the visual rows above remain `not started`; no
 screenshot, reference comparison or parity result is claimed.
 
 The backend now also persists completed Level 2 mutations and can execute an

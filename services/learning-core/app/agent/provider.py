@@ -1,12 +1,45 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Sequence
 from typing import Annotated, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from .types import is_hidden_reasoning_key, validate_bounded_json_object
+
+_PROVIDER_CLOSE_TIMEOUT_SECONDS = 1.0
+
+
+def _consume_close_result(task: asyncio.Task[None]) -> None:
+    with contextlib.suppress(BaseException):
+        task.exception()
+
+
+async def close_provider_safely(
+    provider: AgentProvider, *, timeout: float = _PROVIDER_CLOSE_TIMEOUT_SECONDS
+) -> bool:
+    """Best-effort bounded cleanup that never exposes provider close details."""
+
+    if timeout <= 0:
+        raise ValueError("provider close timeout must be positive")
+    close_task = asyncio.create_task(provider.aclose())
+    try:
+        done, _ = await asyncio.wait({close_task}, timeout=timeout)
+    except asyncio.CancelledError:
+        close_task.cancel()
+        close_task.add_done_callback(_consume_close_result)
+        raise
+    if close_task not in done:
+        close_task.cancel()
+        close_task.add_done_callback(_consume_close_result)
+        return False
+    try:
+        close_task.result()
+    except BaseException:
+        return False
+    return True
 
 
 def _reject_hidden_reasoning(value: object) -> None:
@@ -158,6 +191,7 @@ class ProviderDisconnectedError(ConnectionError):
 
 __all__ = [
     "AgentProvider",
+    "close_provider_safely",
     "ContentDelta",
     "FixedAutomationProvider",
     "ProviderAction",

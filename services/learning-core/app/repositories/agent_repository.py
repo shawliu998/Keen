@@ -26,7 +26,7 @@ class ToolReservation(TypedDict):
 
 
 _RUN_TRANSITIONS = {
-    "queued": frozenset({"running", "cancelled", "interrupted"}),
+    "queued": frozenset({"running", "failed", "cancelled", "interrupted"}),
     "running": frozenset(
         {"waiting_approval", "completed", "failed", "cancelled", "interrupted"}
     ),
@@ -40,6 +40,11 @@ _RUN_TRANSITIONS = {
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _recovery_event_id(run_id: str, event_type: str) -> str:
+    digest = hashlib.sha256(f"{run_id}\0{event_type}".encode("utf-8")).hexdigest()
+    return f"event-recovery-{digest}"
 
 
 def _object_json(value: object, *, label: str) -> str:
@@ -286,6 +291,15 @@ class AgentRepository:
         result = dict(row)
         result["input"] = load_json(result.pop("input_json"))
         return result
+
+    def find_run_by_idempotency(
+        self, *, kind: str, idempotency_key: str
+    ) -> dict | None:
+        row = self.connection.execute(
+            "SELECT id FROM agent_runs WHERE kind = ? AND idempotency_key = ?",
+            (kind, idempotency_key),
+        ).fetchone()
+        return self.get_run(str(row["id"])) if row is not None else None
 
     def transition_run(
         self,
@@ -866,6 +880,29 @@ class AgentRepository:
                 """,
                 (now,),
             )
+            for run_id in ids:
+                self.append_event(
+                    event_id=_recovery_event_id(run_id, "status"),
+                    run_id=run_id,
+                    event_type="status",
+                    payload={"status": "interrupted"},
+                    commit=False,
+                )
+                self.append_event(
+                    event_id=_recovery_event_id(run_id, "error"),
+                    run_id=run_id,
+                    event_type="error",
+                    payload={
+                        "code": "process_restarted",
+                        "message": (
+                            "Agent run was interrupted by restart; start a new run "
+                            "to continue"
+                        ),
+                        "retryable": True,
+                        "status": "interrupted",
+                    },
+                    commit=False,
+                )
         return ids
 
     def _get_json_row(
