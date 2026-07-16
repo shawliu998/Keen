@@ -13,6 +13,8 @@ from .types import (
     PermissionLevel,
     ToolArguments,
     ToolEffect,
+    ToolOutput,
+    is_hidden_reasoning_key,
     validate_bounded_json_object,
 )
 
@@ -50,18 +52,33 @@ def _is_forbidden_name(name: str) -> bool:
     return lowered in _FORBIDDEN_ARGUMENT_NAMES or lowered.endswith(("_path", "_sql"))
 
 
-def _validate_annotation(annotation: object, *, seen: set[type[BaseModel]]) -> None:
+def _validate_annotation(
+    annotation: object,
+    *,
+    seen: set[type[BaseModel]],
+    reject_unsafe_inputs: bool,
+    reject_hidden_outputs: bool,
+) -> None:
     if annotation in {Any, object}:
-        raise ToolRegistrationError("tool argument schemas cannot contain Any/object")
-    if isinstance(annotation, type) and issubclass(annotation, PurePath):
+        raise ToolRegistrationError("tool schemas cannot contain Any/object")
+    if (
+        reject_unsafe_inputs
+        and isinstance(annotation, type)
+        and issubclass(annotation, PurePath)
+    ):
         raise ToolRegistrationError("tool arguments cannot accept filesystem paths")
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        _validate_model(annotation, seen=seen)
+        _validate_model(
+            annotation,
+            seen=seen,
+            reject_unsafe_inputs=reject_unsafe_inputs,
+            reject_hidden_outputs=reject_hidden_outputs,
+        )
         return
     origin = get_origin(annotation)
     if origin in {dict, Mapping}:
         raise ToolRegistrationError(
-            "tool argument schemas cannot contain arbitrary mappings; use a typed model"
+            "tool schemas cannot contain arbitrary mappings; use a typed model"
         )
     if origin is None:
         return
@@ -71,26 +88,47 @@ def _validate_annotation(annotation: object, *, seen: set[type[BaseModel]]) -> N
         arguments = get_args(annotation)
     for argument in arguments:
         if argument is not type(None):
-            _validate_annotation(argument, seen=seen)
+            _validate_annotation(
+                argument,
+                seen=seen,
+                reject_unsafe_inputs=reject_unsafe_inputs,
+                reject_hidden_outputs=reject_hidden_outputs,
+            )
 
 
 def _validate_model(
-    model: type[BaseModel], *, seen: set[type[BaseModel]] | None = None
+    model: type[BaseModel],
+    *,
+    seen: set[type[BaseModel]] | None = None,
+    reject_unsafe_inputs: bool = True,
+    reject_hidden_outputs: bool = False,
 ) -> None:
     if model.model_config.get("extra") != "forbid":
-        raise ToolRegistrationError("tool argument models must set extra='forbid'")
+        raise ToolRegistrationError("tool models must set extra='forbid'")
+    if reject_hidden_outputs and model.model_config.get("strict") is not True:
+        raise ToolRegistrationError("tool result models must set strict=True")
     seen = seen or set()
     if model in seen:
         return
     seen.add(model)
     for field_name, field in model.model_fields.items():
-        if _is_forbidden_name(field_name) or (
-            field.alias is not None and _is_forbidden_name(field.alias)
+        names = (field_name,) if field.alias is None else (field_name, field.alias)
+        if reject_hidden_outputs and any(
+            is_hidden_reasoning_key(name) for name in names
         ):
+            raise ToolRegistrationError(
+                f"tool result '{field_name}' could expose hidden model reasoning"
+            )
+        if reject_unsafe_inputs and any(_is_forbidden_name(name) for name in names):
             raise ToolRegistrationError(
                 f"tool argument '{field_name}' could accept arbitrary SQL or a file path"
             )
-        _validate_annotation(field.annotation, seen=seen)
+        _validate_annotation(
+            field.annotation,
+            seen=seen,
+            reject_unsafe_inputs=reject_unsafe_inputs,
+            reject_hidden_outputs=reject_hidden_outputs,
+        )
 
 
 def _validate_permission_effect(tool: AgentTool[ToolArguments]) -> None:
@@ -136,6 +174,16 @@ class ToolRegistry:
                 "tool arguments_model must extend ToolArguments"
             )
         _validate_model(tool.arguments_model)
+        result_model = getattr(tool, "result_model", None)
+        if not isinstance(result_model, type) or not issubclass(
+            result_model, ToolOutput
+        ):
+            raise ToolRegistrationError("tool result_model must extend ToolOutput")
+        _validate_model(
+            result_model,
+            reject_unsafe_inputs=False,
+            reject_hidden_outputs=True,
+        )
         _validate_permission_effect(tool)
         self._tools[tool.name] = tool
 

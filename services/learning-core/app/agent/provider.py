@@ -3,9 +3,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Sequence
-from typing import Annotated, Literal, Protocol, TypeAlias
+from typing import Annotated, Literal, Protocol, TypeAlias, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from .types import is_hidden_reasoning_key, validate_bounded_json_object
 
@@ -137,6 +144,56 @@ class ProviderFinished(BaseModel):
     kind: Literal["finished"] = "finished"
 
 
+class ProviderToolResult(BaseModel):
+    """Private, bounded tool feedback returned to the active provider."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    call_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
+    tool_name: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z][a-z0-9_]{0,79}$",
+    )
+    invocation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
+    trust: Literal["untrusted_tool_data"] = "untrusted_tool_data"
+    fidelity: Literal["full", "audit_summary"]
+    replayed: bool
+    output: dict[str, object]
+    mutation_ids: tuple[
+        Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=256,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+            ),
+        ],
+        ...,
+    ] = Field(max_length=100)
+
+    @field_validator("output")
+    @classmethod
+    def validate_output(cls, value: dict[str, object]) -> dict[str, object]:
+        validate_bounded_json_object(value)
+        _reject_hidden_reasoning(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_replay_fidelity(self) -> ProviderToolResult:
+        if self.replayed != (self.fidelity == "audit_summary"):
+            raise ValueError("replayed tool feedback must use audit_summary fidelity")
+        return self
+
+
 ProviderAction: TypeAlias = Annotated[
     ContentDelta | ToolCall | ProviderCheckpoint | ProviderWarning | ProviderFinished,
     Field(discriminator="kind"),
@@ -160,6 +217,11 @@ class AgentProvider(Protocol):
     async def aclose(self) -> None: ...
 
 
+@runtime_checkable
+class ToolFeedbackProvider(Protocol):
+    async def submit_tool_result(self, result: ProviderToolResult) -> None: ...
+
+
 class FixedAutomationProvider:
     """Deterministic provider fixture for automation and E2E tests only."""
 
@@ -173,13 +235,23 @@ class FixedAutomationProvider:
         self._actions = tuple(
             _PROVIDER_ACTION_ADAPTER.validate_python(action) for action in actions
         )
+        self._tool_results: tuple[ProviderToolResult, ...] = ()
         self.closed = False
+
+    @property
+    def tool_results(self) -> tuple[ProviderToolResult, ...]:
+        return self._tool_results
 
     async def stream(self, request: ProviderRequest) -> AsyncIterator[ProviderAction]:
         del request
         for action in self._actions:
             await asyncio.sleep(0)
             yield action
+
+    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+        if len(self._tool_results) >= 1_000:
+            raise ValueError("automation tool result sequence is too large")
+        self._tool_results = (*self._tool_results, result)
 
     async def aclose(self) -> None:
         self.closed = True
@@ -204,6 +276,8 @@ __all__ = [
     "ProviderFinished",
     "ProviderOutputError",
     "ProviderRequest",
+    "ProviderToolResult",
     "ProviderWarning",
+    "ToolFeedbackProvider",
     "ToolCall",
 ]

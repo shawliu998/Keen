@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -28,6 +29,13 @@ AgentEventType = Literal[
 ]
 _TERMINAL_EVENT_TYPES = {"done", "error"}
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+
+
+def _tool_event_id(step_id: str, event_type: str, ordinal: int) -> str:
+    digest = hashlib.sha256(
+        f"{step_id}\0{event_type}\0{ordinal}".encode("utf-8")
+    ).hexdigest()
+    return f"event-tool-{digest}"
 
 
 def _reject_hidden_reasoning(value: object) -> None:
@@ -264,34 +272,145 @@ class AgentEventStore:
                             step_id,
                         ),
                     )
-                elif step["status"] != "completed":
+                elif step["status"] == "completed":
+                    # The stable call already published its result atomically with
+                    # completing this step. A provider retry still receives the
+                    # private audit-summary feedback, but must not rewrite the
+                    # original public event with a replay-shaped payload.
+                    connection.commit()
+                    return []
+                else:
                     raise ValueError(
                         "Agent tool step cannot complete from its current state"
                     )
                 rows = [
-                    repository.append_event(
-                        event_id=self._new_event_id(),
+                    self._append_event_once(
+                        connection=connection,
+                        repository=repository,
+                        event_id=_tool_event_id(step_id, "tool_result", 0),
                         run_id=run_id,
                         event_type="tool_result",
                         payload=safe_result,
-                        commit=False,
                     )
                 ]
                 rows.extend(
-                    repository.append_event(
-                        event_id=self._new_event_id(),
+                    self._append_event_once(
+                        connection=connection,
+                        repository=repository,
+                        event_id=_tool_event_id(step_id, "state_mutation", index),
                         run_id=run_id,
                         event_type="state_mutation",
                         payload=payload,
-                        commit=False,
                     )
-                    for payload in safe_mutations
+                    for index, payload in enumerate(safe_mutations)
                 )
                 connection.commit()
             except Exception:
                 connection.rollback()
                 raise
         return [self._event(row) for row in rows]
+
+    def recover_completed_tool_steps(self, *, run_id: str | None = None) -> list[str]:
+        """Publish durable audit successes left between tool commit and events."""
+
+        if run_id is not None:
+            self._validate_identifier(run_id, label="run ID")
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.id AS step_id, s.run_id, s.input_json, i.id AS invocation_id,
+                       i.tool_name, i.result_summary_json
+                FROM agent_steps s
+                JOIN tool_invocations i ON i.step_id = s.id AND i.run_id = s.run_id
+                WHERE s.status = 'running' AND i.status = 'succeeded'
+                  AND (? IS NULL OR s.run_id = ?)
+                ORDER BY s.run_id, s.ordinal
+                """,
+                (run_id, run_id),
+            ).fetchall()
+        recovered: list[str] = []
+        for row in rows:
+            input_data = json.loads(str(row["input_json"]))
+            call_id = input_data.get("callId")
+            if not isinstance(call_id, str):
+                continue
+            result_summary = json.loads(str(row["result_summary_json"] or "{}"))
+            with self._database.connection() as connection:
+                mutations = connection.execute(
+                    """
+                    SELECT id, entity_type, entity_id, operation, reversible
+                    FROM state_mutations
+                    WHERE tool_invocation_id = ? ORDER BY ordinal
+                    """,
+                    (row["invocation_id"],),
+                ).fetchall()
+            self.complete_tool_step(
+                run_id=str(row["run_id"]),
+                step_id=str(row["step_id"]),
+                result_payload={
+                    "callId": call_id,
+                    "invocationId": str(row["invocation_id"]),
+                    "toolName": str(row["tool_name"]),
+                    "result": result_summary,
+                    "truncated": True,
+                    "replayed": False,
+                },
+                mutation_payloads=[
+                    {
+                        "callId": call_id,
+                        "invocationId": str(row["invocation_id"]),
+                        "mutationId": str(mutation["id"]),
+                        "entityType": str(mutation["entity_type"]),
+                        "entityId": str(mutation["entity_id"]),
+                        "operation": str(mutation["operation"]),
+                        "reversible": bool(mutation["reversible"]),
+                    }
+                    for mutation in mutations
+                ],
+            )
+            recovered.append(str(row["step_id"]))
+        return recovered
+
+    @staticmethod
+    def _append_event_once(
+        *,
+        connection,
+        repository: AgentRepository,
+        event_id: str,
+        run_id: str,
+        event_type: AgentEventType,
+        payload: dict[str, object],
+    ) -> dict:
+        existing = connection.execute(
+            """
+            SELECT id, run_id, sequence, event_type, payload_json, created_at
+            FROM agent_events WHERE id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        if existing is None:
+            return repository.append_event(
+                event_id=event_id,
+                run_id=run_id,
+                event_type=event_type,
+                payload=payload,
+                commit=False,
+            )
+        existing_payload = json.loads(str(existing["payload_json"]))
+        if (
+            existing["run_id"] != run_id
+            or existing["event_type"] != event_type
+            or existing_payload != payload
+        ):
+            raise ValueError("deterministic tool event was reused inconsistently")
+        return {
+            "id": existing["id"],
+            "run_id": existing["run_id"],
+            "sequence": existing["sequence"],
+            "event_type": existing["event_type"],
+            "payload": existing_payload,
+            "created_at": existing["created_at"],
+        }
 
     def finish_tool_step_error(
         self,

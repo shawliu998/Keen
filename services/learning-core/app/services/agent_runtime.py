@@ -63,6 +63,7 @@ class AgentRuntimeManager:
         return self._event_store
 
     def recover_interrupted_runs(self) -> list[str]:
+        self._event_store.recover_completed_tool_steps()
         with self._database.connection() as connection:
             return AgentRepository(connection).recover_interrupted_runs()
 

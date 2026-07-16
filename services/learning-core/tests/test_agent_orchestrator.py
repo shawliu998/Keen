@@ -17,11 +17,13 @@ from app.agent.provider import (
     ProviderCheckpoint,
     ProviderFinished,
     ProviderRequest,
+    ProviderToolResult,
     ProviderWarning,
     ToolCall,
 )
-from app.agent.types import StateMutation, ToolContext, ToolResult
+from app.agent.types import StateMutation, ToolContext, ToolOutput, ToolResult
 from app.agent.sqlite_audit import SQLiteAuditSink
+from app.agent.tools.product import register_initial_product_tools
 from app.agent.registry import ToolRegistry
 from app.agent.types import (
     PermissionLevel,
@@ -67,6 +69,117 @@ class _Executor:
                 ),
             ),
         )
+
+
+class _FeedbackDrivenProvider:
+    name = "feedback-test"
+    model = "feedback-driven"
+    version = "v1"
+
+    def __init__(self) -> None:
+        self.feedback: list[ProviderToolResult] = []
+        self.feedback_received = asyncio.Event()
+        self.closed = False
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator:
+        del request
+        yield ToolCall(
+            call_id="call-feedback-1",
+            tool_name="create_note",
+            arguments={"note_id": "note-feedback-1"},
+        )
+        await self.feedback_received.wait()
+        result = self.feedback[0]
+        assert result.output["body"] == "private note body"
+        yield ContentDelta(text=f"Created {result.output['entity_id']}.")
+        yield ProviderFinished()
+
+    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+        self.feedback.append(result)
+        self.feedback_received.set()
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _TwoRoundFeedbackProvider(_FeedbackDrivenProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.second_feedback_received = asyncio.Event()
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator:
+        del request
+        yield ToolCall(
+            call_id="call-round-1",
+            tool_name="create_note",
+            arguments={"note_id": "note-round-1"},
+        )
+        await self.feedback_received.wait()
+        assert self.feedback[0].output["entity_id"] == "note-round-1"
+        yield ToolCall(
+            call_id="call-round-2",
+            tool_name="create_note",
+            arguments={"note_id": "note-round-2"},
+        )
+        await self.second_feedback_received.wait()
+        assert self.feedback[1].output["entity_id"] == "note-round-2"
+        yield ContentDelta(text="Created both notes from real tool results.")
+        yield ProviderFinished()
+
+    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+        self.feedback.append(result)
+        if len(self.feedback) == 1:
+            self.feedback_received.set()
+        elif len(self.feedback) == 2:
+            self.second_feedback_received.set()
+
+
+class _NoFeedbackProvider:
+    name = "no-feedback"
+    model = "invalid-tool-provider"
+    version = "v1"
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator:
+        del request
+        yield ToolCall(
+            call_id="call-without-feedback",
+            tool_name="create_note",
+            arguments={"note_id": "must-not-execute"},
+        )
+        yield ProviderFinished()
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _CancellationResistantFeedbackProvider(_FeedbackDrivenProvider):
+    def __init__(self, *, raises_after_cancel: bool) -> None:
+        super().__init__()
+        self.submit_started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.raises_after_cancel = raises_after_cancel
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator:
+        del request
+        yield ToolCall(
+            call_id="call-cancel-feedback",
+            tool_name="create_note",
+            arguments={"note_id": "note-cancel-feedback"},
+        )
+        yield ProviderFinished()
+
+    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+        self.feedback.append(result)
+        self.submit_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if self.raises_after_cancel:
+                raise RuntimeError("private provider cancel failure")
+            await self.release.wait()
 
 
 def _database(tmp_path) -> Database:
@@ -151,6 +264,179 @@ def test_orchestrator_persists_ordered_public_events_and_terminal_state(tmp_path
     )
 
 
+def test_real_tool_result_privately_drives_the_next_provider_turn(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    provider = _FeedbackDrivenProvider()
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store,
+            provider=provider,
+            executor=_Executor(),
+        ).run("run-1")
+    )
+
+    assert len(provider.feedback) == 1
+    feedback = provider.feedback[0]
+    assert feedback.call_id == "call-feedback-1"
+    assert feedback.tool_name == "create_note"
+    assert feedback.trust == "untrusted_tool_data"
+    assert feedback.fidelity == "full"
+    assert feedback.replayed is False
+    assert feedback.output == {
+        "entity_id": "note-feedback-1",
+        "body": "private note body",
+    }
+    assert len(feedback.mutation_ids) == 1
+    events = store.list_events("run-1")
+    assert [event.event_type for event in events] == [
+        "metadata",
+        "status",
+        "tool_start",
+        "tool_result",
+        "state_mutation",
+        "content_delta",
+        "status",
+        "done",
+    ]
+    assert events[3].payload["result"]["body"] == "[REDACTED]"
+    serialized_events = "\n".join(encode_sse(event) for event in events)
+    assert "private note body" not in serialized_events
+    assert events[5].payload == {"delta": "Created note-feedback-1."}
+    assert provider.closed is True
+
+
+def test_two_sequential_tool_calls_receive_correlated_feedback_once(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    provider = _TwoRoundFeedbackProvider()
+    executor = _Executor()
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store,
+            provider=provider,
+            executor=executor,
+        ).run("run-1")
+    )
+
+    assert [feedback.call_id for feedback in provider.feedback] == [
+        "call-round-1",
+        "call-round-2",
+    ]
+    assert [feedback.output["entity_id"] for feedback in provider.feedback] == [
+        "note-round-1",
+        "note-round-2",
+    ]
+    assert len(executor.calls) == 2
+    events = store.list_events("run-1")
+    assert [event.event_type for event in events].count("tool_result") == 2
+    assert events[-1].event_type == "done"
+
+
+def test_tool_call_without_feedback_capability_fails_before_execution(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    provider = _NoFeedbackProvider()
+    executor = _Executor()
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store,
+            provider=provider,
+            executor=executor,
+        ).run("run-1")
+    )
+
+    assert executor.calls == []
+    assert store.get_run("run-1")["status"] == "failed"
+    assert store.get_run("run-1")["error_code"] == "provider_protocol_error"
+    assert not any(
+        event.event_type in {"tool_start", "tool_result", "done"}
+        for event in store.list_events("run-1")
+    )
+    assert provider.closed is True
+
+
+def test_tool_round_limit_is_cumulative_and_stops_before_next_execution(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(orchestrator_module, "_MAX_TOOL_ROUNDS", 1)
+    database = _database(tmp_path)
+    _create_run(database)
+    provider = FixedAutomationProvider(
+        [
+            ToolCall(
+                call_id="call-limit-1",
+                tool_name="create_note",
+                arguments={"note_id": "note-limit-1"},
+            ),
+            ToolCall(
+                call_id="call-limit-2",
+                tool_name="create_note",
+                arguments={"note_id": "note-limit-2"},
+            ),
+            ProviderFinished(),
+        ]
+    )
+    executor = _Executor()
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store,
+            provider=provider,
+            executor=executor,
+        ).run("run-1")
+    )
+
+    assert len(executor.calls) == 1
+    assert len(provider.tool_results) == 1
+    assert store.get_run("run-1")["status"] == "failed"
+    assert store.get_run("run-1")["error_code"] == "provider_limit_error"
+    assert not any(event.event_type == "done" for event in store.list_events("run-1"))
+
+
+@pytest.mark.parametrize("raises_after_cancel", [False, True])
+def test_cancel_during_feedback_is_bounded_and_remains_cancelled(
+    tmp_path, monkeypatch, raises_after_cancel
+):
+    monkeypatch.setattr(
+        orchestrator_module, "_PROVIDER_FEEDBACK_CANCEL_TIMEOUT_SECONDS", 0.01
+    )
+
+    async def exercise(database: Database) -> AgentEventStore:
+        provider = _CancellationResistantFeedbackProvider(
+            raises_after_cancel=raises_after_cancel
+        )
+        store = AgentEventStore(database)
+        orchestrator = AgentOrchestrator(
+            event_store=store,
+            provider=provider,
+            executor=_Executor(),
+        )
+        execution = asyncio.create_task(orchestrator.run("run-1"))
+        await provider.submit_started.wait()
+        assert await orchestrator.cancel("run-1") is True
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(execution, timeout=0.5)
+        provider.release.set()
+        await asyncio.sleep(0)
+        return store
+
+    database = _database(tmp_path)
+    _create_run(database)
+    store = asyncio.run(exercise(database))
+    run = store.get_run("run-1")
+    assert run["status"] == "cancelled"
+    assert run["error_code"] == "cancelled"
+    assert not any(event.event_type == "done" for event in store.list_events("run-1"))
+
+
 def test_last_event_id_replays_strictly_after_cursor_without_duplicates(tmp_path):
     database = _database(tmp_path)
     _create_run(database)
@@ -206,19 +492,20 @@ def test_replayed_tool_result_is_emitted_without_assuming_raw_output(tmp_path):
     database = _database(tmp_path)
     _create_run(database)
     store = AgentEventStore(database)
+    provider = FixedAutomationProvider(
+        [
+            ToolCall(
+                call_id="call-1",
+                tool_name="create_note",
+                arguments={"note_id": "note-1"},
+            ),
+            ProviderFinished(),
+        ]
+    )
     asyncio.run(
         AgentOrchestrator(
             event_store=store,
-            provider=FixedAutomationProvider(
-                [
-                    ToolCall(
-                        call_id="call-1",
-                        tool_name="create_note",
-                        arguments={"note_id": "note-1"},
-                    ),
-                    ProviderFinished(),
-                ]
-            ),
+            provider=provider,
             executor=_ReplayExecutor(),
         ).run("run-1")
     )
@@ -232,9 +519,18 @@ def test_replayed_tool_result_is_emitted_without_assuming_raw_output(tmp_path):
         "mutationId": "mutation-1",
         "replayed": True,
     }
+    assert len(provider.tool_results) == 1
+    feedback = provider.tool_results[0]
+    assert feedback.replayed is True
+    assert feedback.fidelity == "audit_summary"
+    assert feedback.output == {"entity_id": "note-1"}
 
 
 class _ReadArguments(ToolArguments):
+    concept_id: str
+
+
+class _ReadOutput(ToolOutput):
     concept_id: str
 
 
@@ -243,12 +539,24 @@ class _ReadTool:
     permission_level = PermissionLevel.AUTOMATIC
     effect = ToolEffect.READ
     arguments_model = _ReadArguments
+    result_model = _ReadOutput
 
     async def execute(
         self, arguments: _ReadArguments, context: ToolContext
     ) -> ToolResult:
         context.raise_if_cancelled()
         return ToolResult(output={"concept_id": arguments.concept_id})
+
+
+class _CountingReadTool(_ReadTool):
+    def __init__(self) -> None:
+        self.executions = 0
+
+    async def execute(
+        self, arguments: _ReadArguments, context: ToolContext
+    ) -> ToolResult:
+        self.executions += 1
+        return await super().execute(arguments, context)
 
 
 def test_real_sqlite_audit_sink_accepts_persisted_tool_step_foreign_key(tmp_path):
@@ -280,6 +588,195 @@ def test_real_sqlite_audit_sink_accepts_persisted_tool_step_foreign_key(tmp_path
     assert invocation["status"] == "succeeded"
     assert invocation["step_id"].startswith("step-")
     assert invocation["idempotency_key"].startswith("tool-")
+
+
+def test_same_provider_call_replays_private_audit_without_duplicate_public_result(
+    tmp_path,
+):
+    database = _database(tmp_path)
+    _create_run(database)
+    registry = ToolRegistry()
+    tool = _CountingReadTool()
+    registry.register(tool)
+    provider = FixedAutomationProvider(
+        [
+            ToolCall(
+                call_id="read-retry",
+                tool_name="read_concept",
+                arguments={"concept_id": "concept-limits"},
+            ),
+            ToolCall(
+                call_id="read-retry",
+                tool_name="read_concept",
+                arguments={"concept_id": "concept-limits"},
+            ),
+            ProviderFinished(),
+        ]
+    )
+    store = AgentEventStore(database)
+    with database.connection() as audit_connection:
+        asyncio.run(
+            AgentOrchestrator(
+                event_store=store,
+                provider=provider,
+                executor=AgentStepExecutor(
+                    registry,
+                    SQLiteAuditSink(
+                        audit_connection,
+                        reconciliation_connection_factory=database.connection,
+                    ),
+                ),
+            ).run("run-1")
+        )
+
+    events = store.list_events("run-1")
+    assert store.get_run("run-1")["status"] == "completed"
+    assert tool.executions == 1
+    assert [result.fidelity for result in provider.tool_results] == [
+        "full",
+        "audit_summary",
+    ]
+    assert [result.replayed for result in provider.tool_results] == [False, True]
+    assert [event.event_type for event in events].count("tool_start") == 2
+    assert [event.event_type for event in events].count("tool_result") == 1
+    assert events[-1].event_type == "done"
+
+
+def test_same_provider_call_with_changed_arguments_fails_without_reexecution(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    registry = ToolRegistry()
+    tool = _CountingReadTool()
+    registry.register(tool)
+    provider = FixedAutomationProvider(
+        [
+            ToolCall(
+                call_id="read-reused",
+                tool_name="read_concept",
+                arguments={"concept_id": "concept-limits"},
+            ),
+            ToolCall(
+                call_id="read-reused",
+                tool_name="read_concept",
+                arguments={"concept_id": "concept-derivatives"},
+            ),
+            ProviderFinished(),
+        ]
+    )
+    store = AgentEventStore(database)
+    with database.connection() as audit_connection:
+        asyncio.run(
+            AgentOrchestrator(
+                event_store=store,
+                provider=provider,
+                executor=AgentStepExecutor(
+                    registry,
+                    SQLiteAuditSink(
+                        audit_connection,
+                        reconciliation_connection_factory=database.connection,
+                    ),
+                ),
+            ).run("run-1")
+        )
+
+    events = store.list_events("run-1")
+    assert store.get_run("run-1")["status"] == "failed"
+    assert store.get_run("run-1")["error_code"] == "value_error"
+    assert tool.executions == 1
+    assert len(provider.tool_results) == 1
+    assert [event.event_type for event in events].count("tool_result") == 1
+    assert not any(event.event_type == "done" for event in events)
+
+
+def test_startup_reconciles_committed_level_two_tool_before_run_interruption(tmp_path):
+    database = _database(tmp_path)
+    database.seed_demo()
+    _create_run(database)
+    store = AgentEventStore(database)
+    store.start_run(
+        "run-1",
+        metadata={
+            "runId": "run-1",
+            "provider": "automation",
+            "model": "fixed-actions",
+            "providerVersion": "v1",
+        },
+    )
+    store.start_tool_step(
+        run_id="run-1",
+        step_id="step-recovery",
+        ordinal=0,
+        invocation_id="inv-recovery",
+        tool_name="complete_study_task",
+        input_data={
+            "toolName": "complete_study_task",
+            "callId": "call-recovery",
+        },
+    )
+    registry = ToolRegistry()
+    register_initial_product_tools(registry, connection_factory=database.connection)
+    with database.connection() as audit_connection:
+        sink = SQLiteAuditSink(
+            audit_connection,
+            reconciliation_connection_factory=database.connection,
+        )
+        result = asyncio.run(
+            AgentStepExecutor(
+                registry,
+                sink,
+                transaction_factory=sink.transaction,
+            ).execute_step(
+                invocation_id="inv-recovery",
+                idempotency_key="tool-recovery",
+                tool_name="complete_study_task",
+                arguments={
+                    "task_id": "task-chain-rule",
+                    "course_id": "course-calculus",
+                    "expected_revision": 0,
+                    "completed_at": "2026-07-16T10:00:00Z",
+                },
+                context=ToolContext(
+                    run_id="run-1",
+                    step_id="step-recovery",
+                    cancellation_event=asyncio.Event(),
+                ),
+            )
+        )
+
+    assert result.output["status"] == "completed"
+    with database.connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT status FROM agent_steps WHERE id = 'step-recovery'"
+            ).fetchone()[0]
+            == "running"
+        )
+        assert (
+            connection.execute(
+                "SELECT status FROM study_tasks WHERE id = 'task-chain-rule'"
+            ).fetchone()[0]
+            == "completed"
+        )
+    assert not any(
+        event.event_type in {"tool_result", "state_mutation"}
+        for event in store.list_events("run-1")
+    )
+
+    assert store.recover_completed_tool_steps() == ["step-recovery"]
+    with database.connection() as connection:
+        assert AgentRepository(connection).recover_interrupted_runs() == ["run-1"]
+    events = store.list_events("run-1")
+    event_types = [event.event_type for event in events]
+    assert event_types[-4:] == ["tool_result", "state_mutation", "status", "error"]
+    mutation = next(event for event in events if event.event_type == "state_mutation")
+    assert mutation.payload["entityId"] == "task-chain-rule"
+    assert mutation.payload["reversible"] is True
+    event_ids = [event.id for event in events]
+
+    assert store.recover_completed_tool_steps() == []
+    with database.connection() as connection:
+        assert AgentRepository(connection).recover_interrupted_runs() == []
+    assert [event.id for event in store.list_events("run-1")] == event_ids
 
 
 class _ReservationCommitThenRaiseConnection(sqlite3.Connection):

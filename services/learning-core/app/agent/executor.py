@@ -23,6 +23,7 @@ from .types import (
     StateMutation,
     ToolArguments,
     ToolContext,
+    ToolOutput,
     ToolResult,
     ToolReplayResult,
 )
@@ -124,7 +125,9 @@ class AgentStepExecutor:
             result = await self._run_cancellable(
                 tool.execute(validated, context), context
             )
-            result = self._validate_result(PermissionLevel.AUTOMATIC, result)
+            result = self._validate_result(
+                PermissionLevel.AUTOMATIC, tool.result_model, result
+            )
             await self._audit_sink.record_succeeded(
                 self._success_record(invocation_id, result),
                 mutations=result.mutations,
@@ -168,7 +171,9 @@ class AgentStepExecutor:
             result = await self._run_cancellable(
                 tool.execute(arguments, transactional_context), transactional_context
             )
-            result = self._validate_result(PermissionLevel.LOCAL_REVERSIBLE, result)
+            result = self._validate_result(
+                PermissionLevel.LOCAL_REVERSIBLE, tool.result_model, result
+            )
             transactional_context.raise_if_cancelled()
             await self._audit_sink.record_succeeded(
                 self._success_record(invocation_id, result),
@@ -178,7 +183,11 @@ class AgentStepExecutor:
             return result
 
     @staticmethod
-    def _validate_result(permission: PermissionLevel, result: ToolResult) -> ToolResult:
+    def _validate_result(
+        permission: PermissionLevel,
+        result_model: type[ToolOutput],
+        result: ToolResult,
+    ) -> ToolResult:
         if not isinstance(result, ToolResult):
             raise ToolContractError("registered tools must return ToolResult")
         try:
@@ -204,7 +213,15 @@ class AgentStepExecutor:
                     raise ToolPermissionError(
                         "Level 2 tools must return before/after/undo mutation data"
                     )
-        return validated
+        try:
+            output = result_model.model_validate(
+                validated.output, strict=True
+            ).model_dump(mode="json")
+            return ToolResult(output=output, mutations=validated.mutations)
+        except ValidationError as error:
+            raise ToolContractError(
+                "tool output does not match its registered result model"
+            ) from error
 
     @staticmethod
     def _success_record(invocation_id: str, result: ToolResult) -> ToolAuditSuccess:

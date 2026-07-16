@@ -19,6 +19,7 @@ from app.agent import (
     ToolRegistry,
     ToolResult,
 )
+from app.agent.types import ToolOutput
 
 
 class EmptyArguments(ToolArguments):
@@ -68,6 +69,7 @@ class MutatingReadTool:
     permission_level = PermissionLevel.AUTOMATIC
     effect = ToolEffect.READ
     arguments_model = EmptyArguments
+    result_model = ToolOutput
 
     async def execute(
         self, arguments: EmptyArguments, context: ToolContext
@@ -113,6 +115,7 @@ class MissingUndoTool:
     permission_level = PermissionLevel.LOCAL_REVERSIBLE
     effect = ToolEffect.LOCAL_WRITE
     arguments_model = EmptyArguments
+    result_model = ToolOutput
 
     async def execute(
         self, arguments: EmptyArguments, context: ToolContext
@@ -253,6 +256,7 @@ class LevelThreeTool:
     permission_level = PermissionLevel.CONFIRM_FIRST
     effect = ToolEffect.EXTERNAL_OR_DESTRUCTIVE
     arguments_model = EmptyArguments
+    result_model = ToolOutput
 
     def __init__(self) -> None:
         self.executed = False

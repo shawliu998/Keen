@@ -55,7 +55,7 @@ Status: **in progress**. The document/import/retrieval/citation portions exist; 
 | Quiz | Three bundled single-choice questions scored in React state | `not started`; no assessment records or mastery/review mutation |
 | Flashcards | Bundled sample cards and in-memory ratings | `not started`; FSRS is not connected |
 | Learning Feed | Real `/v1/demo-state` task/mastery read with no live mutation | `in progress`; candidate generation, rationale and actions are `not started` |
-| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools, audited mutations, allowlisted Study Task Undo/Redo HTTP, a visible Home Agent runtime/activity surface, and a configured loopback text-only provider | `in progress`; multi-turn tool-result feedback, approval execution, remaining tool groups and lifecycle E2E are open |
+| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools/results, audited mutations, provider-private multi-turn feedback, allowlisted Study Task Undo/Redo HTTP, a visible Home Agent runtime/activity surface, and a configured loopback text-only provider | `in progress`; production tool selection with run-derived scope, approval execution, remaining tool groups and lifecycle E2E are open |
 | Mastery | Deterministic BKT accepts only `concept_id` + boolean correctness and writes a basic event | `in progress`; evidence weighting, traceability and algorithm version are `not started` |
 | Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery and a real-Uvicorn/socket SIGKILL/restart E2E exist | `in progress`; automatic Tauri relaunch and conversation/session/attempt/review recovery remain open |
 
@@ -163,7 +163,8 @@ use the configured loopback chat model as a text-only provider or return truthfu
 The Home surface now creates, gets, cancels and reconnects runs, renders public
 activity, and invokes visible Study Task Undo/Redo controls from durable audit
 events. Process-restart provider continuation, approval execution, remaining
-tool groups and a provider↔tool-result multi-turn protocol remain `not started`.
+tool groups and a production tool-selecting provider with run-derived scope remain
+`not started`; the provider-private feedback protocol itself is implemented.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
 
@@ -484,6 +485,30 @@ passed 589/589 with one existing Starlette warning; Ruff lint/format passed all
 121 learning-core Python files. The helper is not shipped, and this evidence
 does not prove the Tauri supervisor automatically relaunched a packaged sidecar
 or restored the WebView, so lifecycle Gate 3 remains open.
+
+The multi-turn protocol slice now requires every registered tool to declare a
+closed Pydantic result model. After a tool step is durably completed, a
+tool-aware provider receives private, bounded feedback marked as untrusted tool
+data; fresh output has full fidelity while replay is explicitly only an audit
+summary. Public SSE/SQLite events remain redacted and mutation
+before/after/undo stays inside the controlled persistence boundary. Tests prove
+that real feedback gates the next provider turn, two sequential calls stay
+correlated, raw private result text does not enter public events, replay cannot
+claim full fidelity, providers without feedback support fail before execution,
+and the cumulative tool-round limit stops before another side effect. Strict
+result validation rejects coercion even when a field attempts to disable it;
+bounded cancellation cannot be turned into a failed or hung run by provider
+cleanup. Deterministic event IDs and startup reconciliation also publish any
+committed Level 2 result/mutation left in the pre-event crash window before the
+run is marked interrupted, without duplicates. Real SQLite replay tests also
+prove that an identical provider `call_id` executes once, feeds back a private
+full result followed by an audit summary, and publishes one public result;
+changed arguments fail without re-execution. The full Python suite passed
+621/621 with one existing Starlette warning; Ruff lint and
+format passed all 122 learning-core Python files. LocalChat still exposes no
+tools, and production model-selected tools require run-derived scope and an
+explicit data-sharing policy, so this is protocol evidence rather than a claim
+of a complete tool-capable learning Agent.
 
 ### Gate 4 — durable Conversation and Deep Learn
 

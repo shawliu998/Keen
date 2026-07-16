@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import pytest
+from pydantic import Field, field_validator
 
 from app.agent import (
     AgentStepExecutor,
@@ -20,11 +21,22 @@ from app.agent import (
     UntrustedDocument,
     summarize_for_audit,
 )
+from app.agent.types import ToolOutput
 
 
 class WriteArguments(ToolArguments):
     note_id: str
     title: str
+
+
+class WriteOutput(ToolOutput):
+    entity_id: str
+    body: str
+
+    @field_validator("body")
+    @classmethod
+    def normalize_body(cls, value: str) -> str:
+        return value.strip()
 
 
 class FakeTransaction:
@@ -87,6 +99,7 @@ class WriteTool:
     permission_level = PermissionLevel.LOCAL_REVERSIBLE
     effect = ToolEffect.LOCAL_WRITE
     arguments_model = WriteArguments
+    result_model = WriteOutput
 
     async def execute(
         self, arguments: WriteArguments, context: ToolContext
@@ -141,6 +154,108 @@ def test_level_two_domain_change_and_success_audit_share_one_transaction():
     assert committed == ["domain-mutation", "success-audit"]
     assert audit.succeeded[0].result.summary["body"] == "[REDACTED]"
     assert audit.raw_mutations == [result.mutations]
+
+
+def test_executor_normalizes_registered_output_before_feedback_and_audit():
+    registry = ToolRegistry()
+    registry.register(WriteTool())
+    committed: list[str] = []
+    audit = FakeAuditSink()
+    result = asyncio.run(
+        AgentStepExecutor(
+            registry,
+            audit,
+            transaction_factory=lambda: FakeTransaction(committed),
+        ).execute_step(
+            invocation_id="invocation-normalized",
+            tool_name="create_note",
+            arguments={"note_id": "note-1", "title": "  Limits  "},
+            context=_context(),
+        )
+    )
+
+    assert result.output == {"entity_id": "note-1", "body": "Limits"}
+    assert audit.succeeded[0].result.sha256 == summarize_for_audit(result.output).sha256
+
+
+class UndeclaredOutputWriteTool(WriteTool):
+    name = "undeclared_output_write"
+
+    async def execute(
+        self, arguments: WriteArguments, context: ToolContext
+    ) -> ToolResult:
+        result = await super().execute(arguments, context)
+        return result.model_copy(
+            update={"output": {**result.output, "undeclared": "must not escape"}}
+        )
+
+
+class CoercingWriteOutput(ToolOutput):
+    entity_id: str
+    body: str
+    revision: int = Field(strict=False)
+
+
+class CoercingOutputWriteTool(WriteTool):
+    name = "coercing_output_write"
+    result_model = CoercingWriteOutput
+
+    async def execute(
+        self, arguments: WriteArguments, context: ToolContext
+    ) -> ToolResult:
+        result = await super().execute(arguments, context)
+        return ToolResult(
+            output={**result.output, "revision": "1"},
+            mutations=result.mutations,
+        )
+
+
+def test_executor_rejects_undeclared_output_before_success_audit():
+    registry = ToolRegistry()
+    registry.register(UndeclaredOutputWriteTool())
+    committed: list[str] = []
+    audit = FakeAuditSink()
+
+    with pytest.raises(RuntimeError, match="registered result model"):
+        asyncio.run(
+            AgentStepExecutor(
+                registry,
+                audit,
+                transaction_factory=lambda: FakeTransaction(committed),
+            ).execute_step(
+                invocation_id="invocation-undeclared-output",
+                tool_name="undeclared_output_write",
+                arguments={"note_id": "note-1", "title": "Limits"},
+                context=_context(),
+            )
+        )
+
+    assert committed == []
+    assert not audit.succeeded
+
+
+def test_executor_forces_strict_validation_even_if_a_field_disables_it():
+    registry = ToolRegistry()
+    registry.register(CoercingOutputWriteTool())
+    committed: list[str] = []
+    audit = FakeAuditSink()
+
+    with pytest.raises(RuntimeError, match="registered result model"):
+        asyncio.run(
+            AgentStepExecutor(
+                registry,
+                audit,
+                transaction_factory=lambda: FakeTransaction(committed),
+            ).execute_step(
+                invocation_id="invocation-coercing-output",
+                tool_name="coercing_output_write",
+                arguments={"note_id": "note-1", "title": "Limits"},
+                context=_context(),
+            )
+        )
+
+    assert committed == []
+    assert not audit.succeeded
 
 
 def test_audit_failure_rolls_back_domain_mutation_atomically():

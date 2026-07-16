@@ -33,6 +33,12 @@ class ToolArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ToolOutput(BaseModel):
+    """Base class for every tool's closed, typed provider-facing output."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
 _MAX_JSON_DEPTH = 16
 _MAX_JSON_NODES = 2_048
 _MAX_JSON_STRING_CHARS = 131_072
@@ -304,6 +310,7 @@ class AgentTool(Protocol, Generic[ArgumentsT]):
     permission_level: PermissionLevel
     effect: ToolEffect
     arguments_model: type[ArgumentsT]
+    result_model: type[ToolOutput]
 
     async def execute(
         self, arguments: ArgumentsT, context: ToolContext

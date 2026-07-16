@@ -18,6 +18,7 @@ from app.agent.provider import (
     ProviderAction,
     ProviderFinished,
     ProviderRequest,
+    ProviderToolResult,
     ToolCall,
 )
 from app.chat_interfaces import ChatMessage, ChatModel
@@ -488,12 +489,16 @@ class _ReleasedActionsProvider:
         self.release = threading.Event()
         self.actions = actions
         self.closed = False
+        self.tool_results: list[ProviderToolResult] = []
 
     async def stream(self, request: ProviderRequest) -> AsyncIterator[ProviderAction]:
         del request
         await asyncio.to_thread(self.release.wait)
         for action in self.actions:
             yield action
+
+    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+        self.tool_results.append(result)
 
     async def aclose(self) -> None:
         self.closed = True
@@ -551,6 +556,13 @@ def test_level_two_tool_starts_after_post_and_uses_background_owned_connection(
         ).fetchone()[0]
         assert persisted_mutation == mutation_payload["mutationId"]
     assert provider.closed is True
+    assert len(provider.tool_results) == 1
+    assert provider.tool_results[0].fidelity == "full"
+    assert provider.tool_results[0].output == {
+        "task_id": "task-chain-rule",
+        "status": "completed",
+        "revision": 1,
+    }
 
 
 def test_startup_recovery_appends_one_terminal_error_and_second_start_is_idempotent(

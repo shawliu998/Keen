@@ -5,11 +5,20 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.agent import SQLiteAuditSink, ToolContext, ToolRegistry
+from app.agent import (
+    AgentStepExecutor,
+    AgentTool,
+    SQLiteAuditSink,
+    StateMutation,
+    ToolAuditStart,
+    ToolAuditSuccess,
+    ToolAuditTerminal,
+    ToolContext,
+    ToolRegistry,
+)
 from app.agent.tools import (
     CompleteStudyTaskArguments,
     CompleteStudyTaskTool,
-    ListDueReviewsArguments,
     ListDueReviewsTool,
     ListStudyFeedArguments,
     ListStudyFeedTool,
@@ -58,6 +67,37 @@ def _context(*, transaction=None) -> ToolContext:
     )
 
 
+class _ReadAuditSink:
+    async def record_started(self, record: ToolAuditStart) -> None:
+        del record
+
+    async def record_succeeded(
+        self,
+        record: ToolAuditSuccess,
+        *,
+        mutations: tuple[StateMutation, ...],
+        transaction: object | None,
+    ) -> None:
+        del record
+        assert mutations == ()
+        assert transaction is None
+
+    async def record_failed(self, record: ToolAuditTerminal) -> None:
+        del record
+
+    async def record_cancelled(self, record: ToolAuditTerminal) -> None:
+        del record
+
+    async def record_rejected(self, record: ToolAuditTerminal) -> None:
+        del record
+
+
+def _read_executor(tool: AgentTool) -> AgentStepExecutor:
+    registry = ToolRegistry()
+    registry.register(tool)
+    return AgentStepExecutor(registry, _ReadAuditSink())
+
+
 def test_initial_product_tools_register_with_closed_permission_boundaries(tmp_path):
     database = _database(tmp_path)
     registry = ToolRegistry()
@@ -83,16 +123,17 @@ def test_initial_product_tools_register_with_closed_permission_boundaries(tmp_pa
 def test_list_study_feed_reads_real_scoped_rows(tmp_path):
     database = _database(tmp_path)
     _create_task(database)
-    tool = ListStudyFeedTool(database.connection)
 
     result = asyncio.run(
-        tool.execute(
-            ListStudyFeedArguments(
-                as_of=NOW,
-                course_id="course-calculus",
-                limit=10,
-            ),
-            _context(),
+        _read_executor(ListStudyFeedTool(database.connection)).execute_step(
+            invocation_id="invocation-list-study-feed",
+            tool_name="list_study_feed",
+            arguments={
+                "as_of": NOW.isoformat(),
+                "course_id": "course-calculus",
+                "limit": 10,
+            },
+            context=_context(),
         )
     )
 
@@ -121,13 +162,15 @@ def test_list_due_reviews_reads_real_scoped_schedule(tmp_path):
         )
 
     result = asyncio.run(
-        ListDueReviewsTool(database.connection).execute(
-            ListDueReviewsArguments(
-                due_at=NOW,
-                course_id="course-calculus",
-                limit=10,
-            ),
-            _context(),
+        _read_executor(ListDueReviewsTool(database.connection)).execute_step(
+            invocation_id="invocation-list-due-reviews",
+            tool_name="list_due_reviews",
+            arguments={
+                "due_at": NOW.isoformat(),
+                "course_id": "course-calculus",
+                "limit": 10,
+            },
+            context=_context(),
         )
     )
 

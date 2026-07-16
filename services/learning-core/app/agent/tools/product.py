@@ -19,6 +19,7 @@ from ..types import (
     ToolArguments,
     ToolContext,
     ToolEffect,
+    ToolOutput,
     ToolResult,
 )
 from ..transaction import SQLiteToolSession
@@ -50,11 +51,36 @@ class ListStudyFeedArguments(ToolArguments):
         return _require_utc(value)
 
 
+class StudyFeedTaskOutput(ToolOutput):
+    task_id: str = Field(min_length=1, max_length=256, pattern=SAFE_IDENTIFIER_PATTERN)
+    course_id: str = Field(
+        min_length=1, max_length=256, pattern=SAFE_IDENTIFIER_PATTERN
+    )
+    concept_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+        pattern=SAFE_IDENTIFIER_PATTERN,
+    )
+    title: str = Field(min_length=1, max_length=65_536)
+    reason: str = Field(min_length=1, max_length=65_536)
+    status: Literal["upcoming", "overdue"]
+    due_at: str = Field(min_length=1, max_length=64)
+    estimated_minutes: int = Field(ge=0)
+    priority_score: float
+    revision: int = Field(ge=0)
+
+
+class ListStudyFeedOutput(ToolOutput):
+    tasks: list[StudyFeedTaskOutput] = Field(max_length=50)
+
+
 class ListStudyFeedTool:
     name = "list_study_feed"
     permission_level = PermissionLevel.AUTOMATIC
     effect = ToolEffect.READ
     arguments_model = ListStudyFeedArguments
+    result_model = ListStudyFeedOutput
 
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
@@ -107,11 +133,33 @@ class ListDueReviewsArguments(ToolArguments):
         return _require_utc(value)
 
 
+class DueReviewItemOutput(ToolOutput):
+    review_item_id: str = Field(
+        min_length=1, max_length=256, pattern=SAFE_IDENTIFIER_PATTERN
+    )
+    course_id: str = Field(
+        min_length=1, max_length=256, pattern=SAFE_IDENTIFIER_PATTERN
+    )
+    concept_id: str = Field(
+        min_length=1, max_length=256, pattern=SAFE_IDENTIFIER_PATTERN
+    )
+    item_type: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(min_length=1, max_length=65_536)
+    due_at: str = Field(min_length=1, max_length=64)
+    state: str = Field(min_length=1, max_length=80)
+    revision: int = Field(ge=0)
+
+
+class ListDueReviewsOutput(ToolOutput):
+    review_items: list[DueReviewItemOutput] = Field(max_length=50)
+
+
 class ListDueReviewsTool:
     name = "list_due_reviews"
     permission_level = PermissionLevel.AUTOMATIC
     effect = ToolEffect.READ
     arguments_model = ListDueReviewsArguments
+    result_model = ListDueReviewsOutput
 
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
@@ -165,11 +213,18 @@ class CompleteStudyTaskArguments(ToolArguments):
         return _require_utc(value)
 
 
+class CompleteStudyTaskOutput(ToolOutput):
+    task_id: str = Field(min_length=1, max_length=256, pattern=SAFE_IDENTIFIER_PATTERN)
+    status: Literal["completed"]
+    revision: int = Field(ge=1)
+
+
 class CompleteStudyTaskTool:
     name = "complete_study_task"
     permission_level = PermissionLevel.LOCAL_REVERSIBLE
     effect = ToolEffect.LOCAL_WRITE
     arguments_model = CompleteStudyTaskArguments
+    result_model = CompleteStudyTaskOutput
 
     async def execute(
         self, arguments: CompleteStudyTaskArguments, context: ToolContext
@@ -220,11 +275,16 @@ class ExportStudyDataArguments(ToolArguments):
     format: Literal["json"] = "json"
 
 
+class ExportStudyDataOutput(ToolOutput):
+    pass
+
+
 class ExportStudyDataTool:
     name = "export_study_data"
     permission_level = PermissionLevel.CONFIRM_FIRST
     effect = ToolEffect.EXTERNAL_OR_DESTRUCTIVE
     arguments_model = ExportStudyDataArguments
+    result_model = ExportStudyDataOutput
 
     async def execute(
         self, arguments: ExportStudyDataArguments, context: ToolContext

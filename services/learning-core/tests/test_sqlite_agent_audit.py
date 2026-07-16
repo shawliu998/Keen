@@ -26,6 +26,7 @@ from app.agent import (
     summarize_for_audit,
 )
 from app.agent.tools.product import CompleteStudyTaskTool
+from app.agent.types import ToolOutput
 from app.database import Database
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.task_repository import TaskRepository
@@ -457,6 +458,7 @@ class _BlockingWriteTool:
     permission_level = PermissionLevel.LOCAL_REVERSIBLE
     effect = ToolEffect.LOCAL_WRITE
     arguments_model = _BlockingArguments
+    result_model = ToolOutput
 
     def __init__(self, started: asyncio.Event) -> None:
         self.started = started

@@ -19,6 +19,7 @@ from .provider import (
     ProviderFinished,
     ProviderOutputError,
     ProviderRequest,
+    ProviderToolResult,
     ProviderWarning,
     ToolCall,
 )
@@ -28,6 +29,26 @@ from .types import ToolContext, ToolReplayResult, ToolResult
 _MAX_PROVIDER_ACTIONS = 1_000
 _MAX_PROVIDER_BYTES = 4 * 1024 * 1024
 _MAX_CONTENT_BYTES = 2 * 1024 * 1024
+_MAX_TOOL_ROUNDS = 16
+_MAX_TOOL_FEEDBACK_BYTES = 256 * 1024
+_PROVIDER_FEEDBACK_CANCEL_TIMEOUT_SECONDS = 1.0
+
+
+def _consume_task_result(task: asyncio.Task[None]) -> None:
+    with contextlib.suppress(BaseException):
+        task.exception()
+
+
+async def _cancel_submission_safely(submission: asyncio.Task[None]) -> None:
+    submission.cancel()
+    done, _ = await asyncio.wait(
+        {submission}, timeout=_PROVIDER_FEEDBACK_CANCEL_TIMEOUT_SECONDS
+    )
+    if submission not in done:
+        submission.add_done_callback(_consume_task_result)
+        return
+    with contextlib.suppress(BaseException):
+        submission.result()
 
 
 class StepExecutor(Protocol):
@@ -91,6 +112,8 @@ class AgentOrchestrator:
             ordinal = 0
             provider_bytes = 0
             content_bytes = 0
+            tool_rounds = 0
+            tool_feedback_bytes = 0
             iterator = self._provider.stream(request).__aiter__()
             while not finished:
                 action = await self._next_action(iterator, cancellation)
@@ -115,12 +138,33 @@ class AgentOrchestrator:
                 if isinstance(action, ProviderFinished):
                     finished = True
                     continue
-                await self._handle_action(
+                if isinstance(action, ToolCall):
+                    tool_rounds += 1
+                    if tool_rounds > _MAX_TOOL_ROUNDS:
+                        raise ProviderLimitError("provider tool round limit exceeded")
+                feedback = await self._handle_action(
                     run_id=run_id,
                     ordinal=ordinal - 1,
                     action=action,
                     cancellation=cancellation,
                 )
+                if feedback is not None:
+                    feedback_bytes = len(
+                        json.dumps(
+                            feedback.model_dump(mode="json"),
+                            ensure_ascii=False,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    )
+                    tool_feedback_bytes += feedback_bytes
+                    if tool_feedback_bytes > _MAX_TOOL_FEEDBACK_BYTES:
+                        raise ProviderLimitError(
+                            "provider tool feedback byte limit exceeded"
+                        )
+                    cancellation_check(cancellation)
+                    await self._submit_tool_result(feedback, cancellation)
             cancellation_check(cancellation)
             self._event_store.finish_run(run_id, status="completed")
         except asyncio.CancelledError:
@@ -136,6 +180,8 @@ class AgentOrchestrator:
         except Exception as error:
             if not started:
                 raise
+            with contextlib.suppress(Exception):
+                self._event_store.recover_completed_tool_steps(run_id=run_id)
             self._event_store.finish_run(
                 run_id,
                 status="failed",
@@ -173,26 +219,31 @@ class AgentOrchestrator:
         ordinal: int,
         action: ProviderAction,
         cancellation: asyncio.Event,
-    ) -> None:
+    ) -> ProviderToolResult | None:
         cancellation_check(cancellation)
         if isinstance(action, ContentDelta):
             self._event_store.append(run_id, "content_delta", {"delta": action.text})
-            return
+            return None
         if isinstance(action, ProviderCheckpoint):
             self._event_store.append(
                 run_id,
                 "checkpoint",
                 {"label": action.label, "data": action.data},
             )
-            return
+            return None
         if isinstance(action, ProviderWarning):
             self._event_store.append(
                 run_id,
                 "warning",
                 {"code": action.code, "message": action.message},
             )
-            return
+            return None
         if isinstance(action, ToolCall):
+            submit_tool_result = getattr(self._provider, "submit_tool_result", None)
+            if not callable(submit_tool_result):
+                raise ProviderProtocolError(
+                    "provider emitted a tool call but cannot accept its result"
+                )
             stable_digest = hashlib.sha256(
                 f"{run_id}\0{action.call_id}".encode("utf-8")
             ).hexdigest()
@@ -205,6 +256,10 @@ class AgentOrchestrator:
                 ordinal=ordinal,
                 invocation_id=invocation_id,
                 tool_name=action.tool_name,
+                input_data={
+                    "toolName": action.tool_name,
+                    "callId": action.call_id,
+                },
             )
             try:
                 result = await self._executor.execute_step(
@@ -252,6 +307,15 @@ class AgentOrchestrator:
                     }
                     for mutation_id in result.mutation_ids
                 ]
+                feedback = ProviderToolResult(
+                    call_id=action.call_id,
+                    tool_name=action.tool_name,
+                    invocation_id=result.invocation_id,
+                    fidelity="audit_summary",
+                    replayed=True,
+                    output=result.result_summary,
+                    mutation_ids=result.mutation_ids,
+                )
             else:
                 result_summary = summarize_for_audit(result.output)
                 result_payload = {
@@ -276,14 +340,58 @@ class AgentOrchestrator:
                     }
                     for ordinal, mutation in enumerate(result.mutations)
                 ]
+                feedback = ProviderToolResult(
+                    call_id=action.call_id,
+                    tool_name=action.tool_name,
+                    invocation_id=invocation_id,
+                    fidelity="full",
+                    replayed=False,
+                    output=result.output,
+                    mutation_ids=tuple(
+                        mutation_id_for_invocation(invocation_id, index)
+                        for index, _mutation in enumerate(result.mutations)
+                    ),
+                )
             self._event_store.complete_tool_step(
                 run_id=run_id,
                 step_id=step_id,
                 result_payload=result_payload,
                 mutation_payloads=mutation_payloads,
             )
-            return
+            return feedback
         raise TypeError(f"unsupported provider action: {type(action).__name__}")
+
+    async def _submit_tool_result(
+        self,
+        feedback: ProviderToolResult,
+        cancellation: asyncio.Event,
+    ) -> None:
+        submit_tool_result = getattr(self._provider, "submit_tool_result", None)
+        if not callable(
+            submit_tool_result
+        ):  # pragma: no cover - checked before tool run
+            raise ProviderProtocolError(
+                "provider emitted a tool call but cannot accept its result"
+            )
+        submission = asyncio.create_task(submit_tool_result(feedback))
+        cancelled = asyncio.create_task(cancellation.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {submission, cancelled}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancelled in done and cancellation.is_set():
+                await _cancel_submission_safely(submission)
+                raise asyncio.CancelledError
+            cancelled.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancelled
+            await submission
+        except asyncio.CancelledError:
+            await _cancel_submission_safely(submission)
+            cancelled.cancel()
+            raise
+        finally:
+            cancelled.cancel()
 
     @staticmethod
     async def _next_action(
@@ -338,6 +446,10 @@ def _error_code(error: Exception) -> str:
 
 
 class ProviderLimitError(RuntimeError):
+    pass
+
+
+class ProviderProtocolError(RuntimeError):
     pass
 
 
