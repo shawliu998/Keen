@@ -98,7 +98,9 @@ def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
         )
         connection.commit()
 
-    assert database.migrate() == [6, 7, 8]
+    applied = database.migrate()
+    assert applied[:3] == [6, 7, 8]
+    assert applied[3:] == list(range(9, 17))
     with database.connection() as connection:
         assert (
             connection.execute(
@@ -177,7 +179,9 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
         connection.execute("DROP TRIGGER embedding_models_identity_immutable")
         connection.commit()
 
-    assert database.migrate() == [7, 8]
+    applied = database.migrate()
+    assert applied[:2] == [7, 8]
+    assert applied[2:] == list(range(9, 17))
     with database.connection() as connection:
         trigger = connection.execute(
             """
@@ -186,6 +190,94 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
             """
         ).fetchone()
     assert trigger["name"] == "embedding_models_identity_immutable"
+
+
+def test_learning_loop_migrations_preserve_existing_008_learning_state(tmp_path):
+    database = Database(tmp_path / "learning-loop-forward.sqlite3")
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for version in range(1, 9):
+            path = next(migrations.glob(f"{version:03d}_*.sql"))
+            connection.executescript(path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO schema_migrations(version) VALUES (?)", (version,)
+            )
+        connection.execute(
+            """
+            INSERT INTO courses (id, title, description, created_at)
+            VALUES ('kept-course', 'Kept course', '', '2026-07-01T00:00:00+00:00')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO concepts (id, course_id, name)
+            VALUES ('kept-concept', 'kept-course', 'Kept concept')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO mastery (concept_id, probability, attempts, updated_at)
+            VALUES ('kept-concept', 0.4, 1, '2026-07-02T00:00:00+00:00')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO mastery_events (
+                concept_id, correct, probability_before,
+                probability_after, observed_at
+            ) VALUES (
+                'kept-concept', 1, 0.2, 0.4, '2026-07-02T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO study_tasks (
+                id, course_id, concept_id, title, reason, due_at,
+                estimated_minutes, status, created_at, updated_at
+            ) VALUES (
+                'kept-task', 'kept-course', 'kept-concept', 'Kept task',
+                'Legacy reason', '2026-07-20T00:00:00+00:00', 20, 'upcoming',
+                '2026-07-02T00:00:00+00:00', '2026-07-02T00:00:00+00:00'
+            )
+            """
+        )
+        connection.commit()
+
+    assert database.migrate() == list(range(9, 17))
+    database.verify_consistency()
+    with database.connection() as connection:
+        mastery = connection.execute(
+            "SELECT * FROM mastery WHERE concept_id = 'kept-concept'"
+        ).fetchone()
+        event = connection.execute(
+            "SELECT * FROM mastery_events WHERE concept_id = 'kept-concept'"
+        ).fetchone()
+        task = connection.execute(
+            "SELECT * FROM study_tasks WHERE id = 'kept-task'"
+        ).fetchone()
+
+    assert dict(mastery) == {
+        "concept_id": "kept-concept",
+        "probability": 0.4,
+        "attempts": 1,
+        "updated_at": "2026-07-02T00:00:00+00:00",
+    }
+    assert event["algorithm"] == "legacy_bkt"
+    assert event["algorithm_version"] == "1"
+    assert event["evidence_ids_json"] == "[]"
+    assert task["title"] == "Kept task"
+    assert task["source_type"] == "manual"
+    assert task["priority_components_json"] == "{}"
+    assert task["completed_at"] is None
 
 
 def test_document_index_job_migration_applies_004(tmp_path):

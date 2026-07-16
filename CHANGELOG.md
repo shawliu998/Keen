@@ -4,7 +4,13 @@ All notable changes to Keen are documented here. Status statements must reflect 
 
 ## Unreleased
 
+### In progress
+
+- Started the recoverable local learning-loop milestone on `codex/milestone-learning-loop`; the evidence-gated design covers durable Conversation, audited single-Agent tools, Deep Learn, Assessment, deterministic mastery/misconception updates, FSRS Review, explainable Learning Feed, restart recovery and packaged E2E. These capabilities are not claimed as implemented until their dated acceptance evidence is added.
+
 ### Added
+
+- Forward-only learning-loop migrations 009–016 and typed persistence repositories for Conversation, Agent run/tool/mutation audit, Study Sessions and versioned plans, Assessment attempts/hints/evaluations, mastery evidence, misconceptions, Review/FSRS state, and explainable Study Tasks. Gate 1 preserves legacy learning rows and has repository/migration evidence only; no live learning-loop UI or Agent execution is claimed yet.
 
 - Repository-wide engineering, security, permission, provenance, and verification rules in `AGENTS.md`.
 - Initial empty-repository and missing-reference audit.

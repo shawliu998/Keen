@@ -46,6 +46,20 @@ For every page above, also collect its empty, loading, partial, error, offline, 
 
 2026-07-16 Gate 6 note: Conversation now opens an authenticated page-on-demand PDF citation dialog with supported-geometry highlights, original excerpts, truthful loading/offline/error/page-only states, bounded canvas allocation, keyboard focus trapping/restoration, and a bundled local PDF.js worker. Behavioral tests passed, but no authorized reference screenshot or visual-diff evidence exists; no pixel-parity claim is made.
 
+## Learning-loop live-state gap
+
+Status on 2026-07-16: **in progress** at the milestone level; the following live page connections are `not started`.
+
+| Page | Current rendered behavior | Required real-state visual coverage |
+| --- | --- | --- |
+| Conversation | Live RAG streaming exists, but sent messages/history are not durable and Study mode does not create a Session | persisted history, Ask/Teach/Study/Review/Plan, creation confirmation, restart recovery, Agent activity and interrupted run |
+| Deep Learn | Bundled 31-line eigenvector demo; progress, pause and mastery are illustrative and not persisted | goal confirmation, diagnostic, editable plan, teaching, checkpoint, active recall, practice, summary, pause/resume/recovery and all service/provider failures |
+| Quiz | Three bundled single-choice items with in-memory score/hints | six real item types, confidence, four hint levels, submit/feedback, mastery evidence/delta, misconception and scheduled review |
+| Flashcards | Bundled sample deck; rating remains in UI state and edit is disabled | real due/empty/front/back/source/edit/delete/error states and Again/Hard/Good/Easy schedule results |
+| Learning Feed | Live task/mastery rows are displayed read-only | deterministic rationale breakdown, Start/Complete/Snooze/Reschedule/feedback, mutation rollback and Session create/resume |
+
+No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: the repository still has neither the canonical authorized-scope document nor authorized HyperKnow screenshots/assets. Continue only with provisional non-branded design values, and do not copy protected brand assets or claim parity.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

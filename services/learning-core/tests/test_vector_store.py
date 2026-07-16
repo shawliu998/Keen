@@ -360,7 +360,7 @@ def test_extension_failure_keeps_lexical_database_available(tmp_path):
     database = Database(
         tmp_path / "lexical-only.sqlite3", vector_extension_loader=fail_to_load
     )
-    assert database.migrate() == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert database.migrate() == list(range(1, 17))
     with database.connection() as connection:
         assert connection.execute("SELECT COUNT(*) FROM courses").fetchone()[0] == 0
     assert database.vector_extension_error == "RuntimeError"
