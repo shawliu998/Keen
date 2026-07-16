@@ -55,7 +55,7 @@ Status: **in progress**. The document/import/retrieval/citation portions exist; 
 | Quiz | Three bundled single-choice questions scored in React state | `not started`; no assessment records or mastery/review mutation |
 | Flashcards | Bundled sample cards and in-memory ratings | `not started`; FSRS is not connected |
 | Learning Feed | Real `/v1/demo-state` task/mastery read with no live mutation | `in progress`; candidate generation, rationale and actions are `not started` |
-| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools, audited mutations and allowlisted Study Task Undo/Redo HTTP | `in progress`; real provider, visible Agent Activity/Undo and remaining tool groups are open |
+| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools, audited mutations, allowlisted Study Task Undo/Redo HTTP, and a visible Home Agent runtime/activity surface | `in progress`; real provider, approval execution, remaining tool groups and lifecycle E2E are open |
 | Mastery | Deterministic BKT accepts only `concept_id` + boolean correctness and writes a basic event | `in progress`; evidence weighting, traceability and algorithm version are `not started` |
 | Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery exist | `in progress`; kill-restart/socket E2E and conversation/session/attempt/review recovery remain open |
 
@@ -86,7 +86,7 @@ The current `app/main.py` exposes:
 - retrieval: `POST /v1/search`, deterministic `POST /v1/query`, and generated `POST /v1/answer/stream` SSE.
 - Agent: authenticated `POST /v1/agent/runs`, `GET /v1/agent/runs/{run_id}`, `POST /v1/agent/runs/{run_id}/cancel`, and durable `GET /v1/agent/runs/{run_id}/events` SSE.
 
-All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation and mutation actions are capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet. The Agent API now has a strict frontend client and allowlisted Study Task Undo/Redo resources, but no visible Agent Activity/Undo UI.
+All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation and mutation actions are capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet. The Agent API has a strict frontend client, allowlisted Study Task Undo/Redo resources and a visible Home runtime/activity surface; it still defaults truthfully to `provider_missing` because no real production Agent provider is configured.
 
 ## Reusable modules and required boundaries
 
@@ -159,7 +159,9 @@ access. Authenticated FastAPI create/get/cancel/SSE routes now expose this
 runtime. They use an app-scoped background-owned audit connection, emit a real
 `mutationId` for normal Level 2 mutation events, preserve cursor replay, and
 default to truthful `provider_missing` behavior rather than automation.
-Process-restart provider continuation, UI, visible Undo controls, remaining
+The Home surface now creates, gets, cancels and reconnects runs, renders public
+activity, and invokes visible Study Task Undo/Redo controls from durable audit
+events. Process-restart provider continuation, approval execution, remaining
 tool groups and real provider selection remain `not started`.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
@@ -409,8 +411,8 @@ restart replay, cancellation/rollback, transaction and cursor escape attempts,
 cross-table SQL, forged/combined Undo tracking, REPLACE and cascade deletion.
 The restricted session currently supports only `study_tasks` SELECT/UPDATE;
 new Level 2 domains require explicit capability and negative-test expansion.
-Process-restart provider continuation, visible frontend Agent Activity/Undo,
-real provider selection and the remaining product tool groups are still open,
+Process-restart provider continuation, real provider selection and the
+remaining product tool groups are still open,
 so Gate 3 remains in progress.
 
 The authenticated Agent API slice now implements run create/get/cancel and
@@ -421,9 +423,9 @@ Level 2 mutation's real `mutationId`, applies the shared 64 KiB JSON guard, and
 defaults to `provider_missing` when no real provider is configured. Independent
 verification passed the full Python suite 566/566 and the related subset
 105/105; the execution window additionally passed an expanded 113/113 focused
-subset. Ruff lint, Ruff format and `git diff --check` passed. A real provider,
-visible Agent activity/Undo UI and actual
-kill-restart/socket E2E remain open, so this evidence does not close Gate 3.
+subset. Ruff lint, Ruff format and `git diff --check` passed. A real provider
+and actual kill-restart/socket E2E remain open, so this evidence does not close
+Gate 3.
 
 The next Gate 3 slices added a strict TypeScript Agent run/SSE client plus
 authenticated Study Task Undo/Redo HTTP actions. Client boundaries reject
@@ -436,8 +438,25 @@ lint, strict typecheck and 124/124 Vitest tests passed, including 61/61 focused
 Agent/API-client tests. Python passed 577/577 and Ruff lint/format passed 117
 files after cross-path semantic-idempotency, declared/chunked request-limit and
 three crash-window recovery hardening passes; final independent review found no
-remaining P0/P1. A visible Agent runtime/UI, real provider and lifecycle E2E are
-still required before Gate 3 can close.
+remaining P0/P1. A real provider and lifecycle E2E are still required before
+Gate 3 can close.
+
+The visible Agent runtime slice now mounts an app-level, non-persisted runtime
+inside `LearningCoreProvider`, starts work only from a user event, consumes
+durable SSE with Last-Event-ID recovery and rotated-token reconnection, keeps
+post-terminal Undo/Redo audit batches, aborts local work without sending an
+implicit cancel, and exposes explicit cancel plus terminal-only Study Task
+Undo/Redo controls. The Home composer uses the backend's
+Ask/Teach/Study/Review/Plan modes and renders provider-missing, unavailable,
+offline, partial, interrupted, cancelled, failed and read-only
+waiting-approval states without retaining tool results or hidden reasoning.
+Browser Demo remains request-free, and the still-seeded Feed/statistics are
+visibly labeled Sample. Focused tests passed API client 26/26, activity reducer
+8/8, Activity panel 14/14, runtime integration 9/9 and Home integration 5/5.
+Desktop ESLint, strict typecheck, production build and the full 170/170 Vitest
+suite passed. A 1440×920 current Home capture completed with the truthful
+`missing_reference` result; no authorized reference, real provider,
+kill-restart/socket E2E or visual-parity evidence is claimed.
 
 ### Gate 4 — durable Conversation and Deep Learn
 

@@ -62,17 +62,15 @@ Status on 2026-07-16: **in progress** at the milestone level; the following live
 
 No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: canonical authorization is present, but no authorized HyperKnow screenshot/asset has been captured and accepted into the manifest. Covered protected visuals may now be used for internal implementation after capture; until then, continue with provisional non-branded design values and do not claim parity.
 
-2026-07-16 learning-loop Gate 3 note: backend product tools can now read Study
-Feed/due Review rows and complete a Study Task transactionally. The
-provider-neutral orchestrator persists durable events and supports SSE cursor
-replay through authenticated create/get/cancel/events routes, but no frontend
-surface consumes that stream. Therefore the visual rows above remain `not started`; no
-screenshot, reference comparison or parity result is claimed.
-
-The backend now also persists completed Level 2 mutations and can execute an
-allowlisted Study Task Undo/redo after validating the current revision. There
-is still no visible Undo action, optimistic rollback state, Agent activity
-surface or restart-recovery UI, so this adds no visual acceptance evidence.
+2026-07-16 learning-loop Gate 3 note: Home now visibly consumes authenticated
+Agent create/get/cancel/events, renders durable activity and recovery states,
+and exposes terminal-only Study Task Undo/Redo backed by recorded inverse
+actions. Browser Demo remains request-free; waiting approval is explicitly
+read-only; the still-seeded Feed and statistics are labeled Sample. Component
+and integration behavior tests passed. A new 1440×920 current capture was
+written to `artifacts/visual-diff/current/home.png`; the report remains
+`missing_reference`, so no diff percentage exists. The Home / Agent visual row
+therefore remains Missing rather than passed, and no pixel-parity claim is made.
 
 ## Reference manifest fields
 
