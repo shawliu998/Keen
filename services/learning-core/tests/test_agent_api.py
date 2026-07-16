@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,10 +20,11 @@ from app.agent.provider import (
     ProviderRequest,
     ToolCall,
 )
+from app.chat_interfaces import ChatMessage, ChatModel
 from app.database import Database
 from app.main import create_app
 from app.repositories.agent_repository import AgentRepository
-from app.settings import Settings
+from app.settings import LocalChatSettings, Settings
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -90,6 +92,211 @@ def test_default_runtime_reports_provider_missing_without_creating_run(tmp_path)
         assert client.get("/v1/agent/runs/run-missing", headers=AUTH).status_code == 404
     with Database(settings.database_path).connection() as connection:
         assert connection.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0
+
+
+class _ConfiguredChatProvider:
+    model = ChatModel(provider="ollama", model="keen-local", version="model-v7")
+
+    def __init__(self) -> None:
+        self.messages: tuple[ChatMessage, ...] = ()
+        self.closed = False
+
+    async def stream(self, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
+        self.messages = tuple(messages)
+        yield "A real local "
+        yield "Agent answer."
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def test_local_chat_configuration_automatically_drives_real_agent_run(tmp_path):
+    local_chat = LocalChatSettings(
+        provider="ollama",
+        base_url="http://127.0.0.1:11434",
+        model="keen-local",
+        version="model-v7",
+    )
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "agent-api.sqlite3",
+        local_chat=local_chat,
+    )
+    chat = _ConfiguredChatProvider()
+    factory_configurations: list[LocalChatSettings] = []
+
+    def chat_provider_factory(
+        configuration: LocalChatSettings,
+    ) -> _ConfiguredChatProvider:
+        factory_configurations.append(configuration)
+        return chat
+
+    with TestClient(
+        create_app(settings, chat_provider_factory=chat_provider_factory)
+    ) as client:
+        created = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        terminal = _wait_for_terminal(client, run_id)
+        assert terminal["status"] == "completed"
+        assert terminal["provider"] == "ollama"
+        assert terminal["model"] == "keen-local"
+
+        stream = client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH)
+        assert stream.status_code == 200
+        events = _sse_events(stream.text)
+        metadata = json.loads(events[0]["data"])
+        assert metadata == {
+            "runId": run_id,
+            "provider": "ollama",
+            "model": "keen-local",
+            "providerVersion": "model-v7+keen-agent-text-v1",
+        }
+        assert (
+            "".join(
+                json.loads(event["data"])["delta"]
+                for event in events
+                if event["event"] == "content_delta"
+            )
+            == "A real local Agent answer."
+        )
+        assert events[-1]["event"] == "done"
+
+    assert factory_configurations == [local_chat]
+    assert chat.closed is True
+    assert chat.messages[0].role == "system"
+    with Database(settings.database_path).connection() as connection:
+        row = connection.execute(
+            "SELECT provider, model, prompt_version FROM agent_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+    assert tuple(row) == (
+        "ollama",
+        "keen-local",
+        "model-v7+keen-agent-text-v1",
+    )
+
+
+def test_explicit_agent_provider_factory_precedes_local_chat_configuration(tmp_path):
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "agent-api.sqlite3",
+        local_chat=LocalChatSettings(
+            provider="ollama",
+            base_url="http://127.0.0.1:11434",
+            model="unused-local-model",
+            version="unused-v1",
+        ),
+    )
+    chat_factory_called = False
+
+    def chat_provider_factory(
+        configuration: LocalChatSettings,
+    ) -> _ConfiguredChatProvider:
+        nonlocal chat_factory_called
+        del configuration
+        chat_factory_called = True
+        return _ConfiguredChatProvider()
+
+    with TestClient(
+        create_app(
+            settings,
+            chat_provider_factory=chat_provider_factory,
+            agent_provider_factory=lambda: FixedAutomationProvider(
+                [ContentDelta(text="Explicit provider answer."), ProviderFinished()]
+            ),
+        )
+    ) as client:
+        created = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        assert created.status_code == 202
+        terminal = _wait_for_terminal(client, created.json()["id"])
+
+    assert terminal["status"] == "completed"
+    assert terminal["provider"] == "automation"
+    assert terminal["model"] == "fixed-actions"
+    assert chat_factory_called is False
+
+
+def test_local_chat_agent_fingerprints_long_version_before_run_persistence(tmp_path):
+    long_version = "revision-" + "x" * 247
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "agent-api.sqlite3",
+        local_chat=LocalChatSettings(
+            provider="ollama",
+            base_url="http://127.0.0.1:11434",
+            model="keen-local",
+            version=long_version,
+        ),
+    )
+    chat = _ConfiguredChatProvider()
+    chat.model = ChatModel(
+        provider="ollama",
+        model="keen-local",
+        version=long_version,
+    )
+    expected_version = (
+        f"sha256:{hashlib.sha256(long_version.encode('utf-8')).hexdigest()}"
+        "+keen-agent-text-v1"
+    )
+
+    with TestClient(
+        create_app(settings, chat_provider_factory=lambda _configuration: chat)
+    ) as client:
+        created = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        assert _wait_for_terminal(client, run_id)["status"] == "completed"
+
+    with Database(settings.database_path).connection() as connection:
+        persisted = connection.execute(
+            "SELECT prompt_version FROM agent_runs WHERE id = ?", (run_id,)
+        ).fetchone()[0]
+    assert persisted == expected_version
+    assert len(persisted) <= 128
+
+
+def test_local_chat_agent_rejects_empty_output_without_false_content_or_done(tmp_path):
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "agent-api.sqlite3",
+        local_chat=LocalChatSettings(
+            provider="ollama",
+            base_url="http://127.0.0.1:11434",
+            model="keen-local",
+            version="model-v7",
+        ),
+    )
+
+    class WhitespaceChatProvider(_ConfiguredChatProvider):
+        async def stream(self, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
+            self.messages = tuple(messages)
+            yield "  "
+            yield "\n"
+
+    chat = WhitespaceChatProvider()
+    with TestClient(
+        create_app(settings, chat_provider_factory=lambda _configuration: chat)
+    ) as client:
+        created = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        terminal = _wait_for_terminal(client, run_id)
+        assert terminal["status"] == "failed"
+        assert terminal["errorCode"] == "provider_output_invalid"
+        assert terminal["errorDetail"] == (
+            "The Agent provider returned unusable output; the run did not complete. "
+            "Retry, or choose another configured model."
+        )
+        events = _sse_events(
+            client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH).text
+        )
+        event_types = [event["event"] for event in events]
+        assert "content_delta" not in event_types
+        assert "done" not in event_types
+        assert event_types[-1] == "error"
+
+    assert chat.closed is True
 
 
 def test_provider_factory_failure_is_safe_503_without_persistence_or_secret_log(

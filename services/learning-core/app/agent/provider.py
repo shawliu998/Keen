@@ -189,6 +189,10 @@ class ProviderDisconnectedError(ConnectionError):
     pass
 
 
+class ProviderOutputError(RuntimeError):
+    """A provider completed transport but produced unsafe or unusable output."""
+
+
 __all__ = [
     "AgentProvider",
     "close_provider_safely",
@@ -198,6 +202,7 @@ __all__ = [
     "ProviderCheckpoint",
     "ProviderDisconnectedError",
     "ProviderFinished",
+    "ProviderOutputError",
     "ProviderRequest",
     "ProviderWarning",
     "ToolCall",

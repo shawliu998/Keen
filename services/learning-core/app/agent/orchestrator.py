@@ -17,6 +17,7 @@ from .provider import (
     ProviderCheckpoint,
     ProviderDisconnectedError,
     ProviderFinished,
+    ProviderOutputError,
     ProviderRequest,
     ProviderWarning,
     ToolCall,
@@ -326,6 +327,8 @@ def cancellation_check(cancellation: asyncio.Event) -> None:
 def _error_code(error: Exception) -> str:
     if isinstance(error, ProviderDisconnectedError):
         return "provider_disconnected"
+    if isinstance(error, ProviderOutputError):
+        return "provider_output_invalid"
     name = type(error).__name__
     code = "".join(
         ("_" + character.lower()) if character.isupper() else character
@@ -341,6 +344,11 @@ class ProviderLimitError(RuntimeError):
 def _safe_error_detail(error: Exception) -> str:
     if isinstance(error, ProviderDisconnectedError):
         return str(error)
+    if isinstance(error, ProviderOutputError):
+        return (
+            "The Agent provider returned unusable output; the run did not complete. "
+            "Retry, or choose another configured model."
+        )
     return f"Agent run failed: {type(error).__name__}"
 
 

@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from . import __version__
+from .agent.local_chat import LocalChatAgentProvider
 from .answer_service import (
     AnswerService,
     ChatProviderFactory,
@@ -126,6 +127,17 @@ def create_app(
     agent_provider_factory: AgentProviderFactory | None = None,
 ) -> FastAPI:
     report_startup_phase = startup_phase_reporter or (lambda _phase: None)
+    selected_chat_provider_factory = chat_provider_factory or create_chat_provider
+    selected_agent_provider_factory = agent_provider_factory
+    local_chat_settings = settings.local_chat
+    if selected_agent_provider_factory is None and local_chat_settings is not None:
+
+        def create_local_chat_agent() -> LocalChatAgentProvider:
+            return LocalChatAgentProvider(
+                selected_chat_provider_factory(local_chat_settings)
+            )
+
+        selected_agent_provider_factory = create_local_chat_agent
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -203,7 +215,7 @@ def create_app(
     app.state.database = Database(settings.database_path)
     app.state.agent_runtime = AgentRuntimeManager(
         app.state.database,
-        provider_factory=agent_provider_factory,
+        provider_factory=selected_agent_provider_factory,
     )
     app.state.agent_undo = AgentUndoService(app.state.database)
     app.state.document_import_lock = threading.Lock()
@@ -211,7 +223,7 @@ def create_app(
     app.state.embedding_provider_factory = (
         embedding_provider_factory or create_embedding_provider
     )
-    app.state.chat_provider_factory = chat_provider_factory or create_chat_provider
+    app.state.chat_provider_factory = selected_chat_provider_factory
 
     def enrich_document(repository: DocumentRepository, document: dict) -> dict:
         return enrich_document_knowledge_state(
