@@ -3,6 +3,8 @@ import {
   LearningCoreRequestError,
   LearningCoreResponseError,
   LearningCoreSchemaError,
+  agentMutationActionRequestSchema,
+  agentMutationActionResponseSchema,
   agentRunCreateRequestSchema,
   agentRunEventSchema,
   agentRunSchema,
@@ -155,6 +157,166 @@ describe("LearningCoreClient Agent run JSON contract", () => {
       type: "checkpoint",
       data: { label: "private", data: { internalReasoning: "trace" } },
     }).success).toBe(false);
+  });
+});
+
+describe("LearningCoreClient Agent mutation action contract", () => {
+  const mutationActionResponse = {
+    action: "undo",
+    runId: "run-1",
+    targetMutationId: "mutation-1",
+    invocationId: "invocation-undo-1",
+    mutationId: "mutation-inverse-1",
+    entityType: "study_task",
+    entityId: "task-chain-rule",
+    operation: "update",
+    replayed: false,
+  } as const;
+
+  it("posts authenticated Undo and Redo requests with AbortSignal and preserves replay semantics", async () => {
+    const controller = new AbortController();
+    const responses = [
+      mutationActionResponse,
+      { ...mutationActionResponse, action: "redo", mutationId: "mutation-redo-1", replayed: true },
+    ] as const;
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const response = responses[fetchMock.mock.calls.length - 1];
+      expect(init?.signal).toBe(controller.signal);
+      return jsonResponse(response);
+    });
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    await expect(client.undoAgentMutation(
+      "run-1",
+      "mutation-1",
+      { idempotencyKey: "undo-request-1" },
+      { signal: controller.signal },
+    )).resolves.toEqual(mutationActionResponse);
+    await expect(client.redoAgentMutation(
+      "run-1",
+      "mutation-1",
+      { idempotencyKey: "redo-request-1" },
+      { signal: controller.signal },
+    )).resolves.toEqual(responses[1]);
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://127.0.0.1:8080/v1/agent/runs/run-1/mutations/mutation-1/undo",
+      "http://127.0.0.1:8080/v1/agent/runs/run-1/mutations/mutation-1/redo",
+    ]);
+    expect(fetchMock.mock.calls.map(([, init]) => ({
+      authorization: new Headers(init?.headers).get("Authorization"),
+      contentType: new Headers(init?.headers).get("Content-Type"),
+      body: JSON.parse(String(init?.body)),
+    }))).toEqual([
+      { authorization: `Bearer ${token}`, contentType: "application/json", body: { idempotencyKey: "undo-request-1" } },
+      { authorization: `Bearer ${token}`, contentType: "application/json", body: { idempotencyKey: "redo-request-1" } },
+    ]);
+  });
+
+  it("rejects invalid IDs and non-strict request bodies before sending", async () => {
+    const fetchMock = vi.fn();
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+    const invalidRequests = [
+      () => client.undoAgentMutation("../run", "mutation-1", { idempotencyKey: "undo-1" }),
+      () => client.undoAgentMutation("run-1", "mutation/1", { idempotencyKey: "undo-1" }),
+      () => client.undoAgentMutation("run-1", "mutation-1", { idempotencyKey: "bad key" }),
+      () => client.undoAgentMutation(
+        "run-1",
+        "mutation-1",
+        { idempotencyKey: "undo-1", restore: true } as { idempotencyKey: string },
+      ),
+    ];
+
+    for (const request of invalidRequests) {
+      await expect(Promise.resolve().then(request)).rejects.toBeInstanceOf(LearningCoreRequestError);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(agentMutationActionRequestSchema.safeParse({ idempotencyKey: "undo-1", unknown: true }).success).toBe(false);
+  });
+
+  it("fails closed on unknown fields, invalid replay values, or response/request semantic mismatches", async () => {
+    const invalidResponses = [
+      { ...mutationActionResponse, privateState: "must-not-escape" },
+      { ...mutationActionResponse, replayed: "false" },
+      { ...mutationActionResponse, action: "redo" },
+      { ...mutationActionResponse, runId: "run-other" },
+      { ...mutationActionResponse, targetMutationId: "mutation-other" },
+    ];
+
+    for (const response of invalidResponses) {
+      const client = createLearningCoreClient(
+        "http://127.0.0.1:8080",
+        token,
+        vi.fn(async () => jsonResponse(response)) as unknown as typeof fetch,
+      );
+      await expect(client.undoAgentMutation(
+        "run-1",
+        "mutation-1",
+        { idempotencyKey: "undo-1" },
+      )).rejects.toBeInstanceOf(LearningCoreSchemaError);
+    }
+    expect(agentMutationActionResponseSchema.safeParse({ ...mutationActionResponse, unknown: true }).success).toBe(false);
+  });
+
+  it.each([
+    [409, "undo_conflict", true],
+    [403, "mutation_action_forbidden", false],
+    [404, "mutation_not_found", false],
+    [500, "mutation_action_failed", true],
+  ] as const)("maps HTTP %i %s errors through the safe allowlist", async (status, code, retryable) => {
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => jsonResponse({
+        detail: {
+          code,
+          message: `Safe ${code} message`,
+          retryable,
+          recoveryAction: "Refresh the Agent activity.",
+          automaticRecovery: false,
+          outcomeMayBeDurable: status === 500,
+          databaseTrace: "private-debug-data",
+        },
+      }, status)) as unknown as typeof fetch,
+    );
+
+    const error = await client.undoAgentMutation(
+      "run-1",
+      "mutation-1",
+      { idempotencyKey: "undo-error-1" },
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LearningCoreResponseError);
+    expect(error).toMatchObject({
+      status,
+      detail: {
+        code,
+        retryable,
+        recovery: "Refresh the Agent activity.",
+      },
+    });
+    expect((error as LearningCoreResponseError).detail).not.toHaveProperty("databaseTrace");
+    expect((error as LearningCoreResponseError).detail).not.toHaveProperty("outcomeMayBeDurable");
+  });
+
+  it("does not map an otherwise known mutation error code under the wrong HTTP status", async () => {
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => jsonResponse({
+        detail: {
+          code: "mutation_action_failed",
+          message: "A mismatched status/code pair must not be trusted.",
+        },
+      }, 409)) as unknown as typeof fetch,
+    );
+
+    const error = await client.undoAgentMutation(
+      "run-1",
+      "mutation-1",
+      { idempotencyKey: "undo-mismatch-1" },
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LearningCoreResponseError);
+    expect(error).toMatchObject({ status: 409, detail: { code: null } });
   });
 });
 

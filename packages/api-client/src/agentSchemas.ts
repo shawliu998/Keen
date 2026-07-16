@@ -119,6 +119,22 @@ export const agentCancelResponseSchema = z.object({
   run: agentRunSchema,
 }).strict();
 
+export const agentMutationActionRequestSchema = z.object({
+  idempotencyKey: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/),
+}).strict();
+
+export const agentMutationActionResponseSchema = z.object({
+  action: z.enum(["undo", "redo"]),
+  runId: agentIdentifierSchema,
+  targetMutationId: agentIdentifierSchema,
+  invocationId: agentIdentifierSchema,
+  mutationId: agentIdentifierSchema,
+  entityType: z.literal("study_task"),
+  entityId: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/),
+  operation: z.literal("update"),
+  replayed: z.boolean(),
+}).strict();
+
 const agentEventDataSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("metadata"),
@@ -218,4 +234,6 @@ export type AgentRunStatus = z.infer<typeof agentRunStatusSchema>;
 export type AgentRunCreateRequest = z.input<typeof agentRunCreateRequestSchema>;
 export type AgentRun = z.infer<typeof agentRunSchema>;
 export type AgentCancelResponse = z.infer<typeof agentCancelResponseSchema>;
+export type AgentMutationActionRequest = z.infer<typeof agentMutationActionRequestSchema>;
+export type AgentMutationActionResponse = z.infer<typeof agentMutationActionResponseSchema>;
 export type AgentRunEvent = z.infer<typeof agentRunEventSchema>;

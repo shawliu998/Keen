@@ -1,10 +1,14 @@
 import { z, type ZodType } from "zod";
 import {
   agentCancelResponseSchema,
+  agentMutationActionRequestSchema,
+  agentMutationActionResponseSchema,
   agentRunCreateRequestSchema,
   agentRunEventSchema,
   agentRunSchema,
   type AgentCancelResponse,
+  type AgentMutationActionRequest,
+  type AgentMutationActionResponse,
   type AgentRun,
   type AgentRunCreateRequest,
   type AgentRunEvent,
@@ -129,10 +133,47 @@ export type LearningCoreErrorDetail = {
   retryable: boolean | null;
   recovery: string | null;
   documentId: string | null;
-  code: "provider_missing" | "provider_unavailable" | "agent_busy" | null;
+  code: AgentResponseErrorCode | null;
 };
 
-const agentResponseErrorCodeSchema = z.enum(["provider_missing", "provider_unavailable", "agent_busy"]);
+const agentResponseErrorCodeSchema = z.enum([
+  "provider_missing",
+  "provider_unavailable",
+  "agent_busy",
+  "mutation_not_found",
+  "mutation_action_forbidden",
+  "run_not_terminal",
+  "undo_in_progress",
+  "undo_conflict",
+  "idempotency_key_reused",
+  "idempotency_key_terminal",
+  "mutation_not_undone",
+  "redo_unavailable",
+  "mutation_already_undone",
+  "idempotency_conflict",
+  "mutation_action_failed",
+]);
+export type AgentResponseErrorCode = z.infer<typeof agentResponseErrorCodeSchema>;
+
+function isAgentErrorCodeAllowedForStatus(status: number, code: AgentResponseErrorCode): boolean {
+  if (status === 503) return code === "provider_missing" || code === "provider_unavailable";
+  if (status === 403) return code === "mutation_action_forbidden";
+  if (status === 404) return code === "mutation_not_found";
+  if (status === 500) return code === "mutation_action_failed";
+  if (status !== 409) return false;
+  return [
+    "agent_busy",
+    "run_not_terminal",
+    "undo_in_progress",
+    "undo_conflict",
+    "idempotency_key_reused",
+    "idempotency_key_terminal",
+    "mutation_not_undone",
+    "redo_unavailable",
+    "mutation_already_undone",
+    "idempotency_conflict",
+  ].includes(code);
+}
 
 const errorEnvelopeSchema = z.object({
   detail: z.union([
@@ -191,7 +232,7 @@ async function parseErrorResponse(response: Response): Promise<LearningCoreError
     retryable: parsed.data.detail.retryable ?? null,
     recovery: parsed.data.detail.recovery ?? parsed.data.detail.recoveryAction ?? null,
     documentId: parsed.data.detail.documentId ?? null,
-    code: code.success ? code.data : null,
+    code: code.success && isAgentErrorCodeAllowedForStatus(response.status, code.data) ? code.data : null,
   };
 }
 
@@ -464,6 +505,56 @@ export class LearningCoreClient {
       `/v1/agent/runs/${encodeURIComponent(runId)}/cancel`,
       agentCancelResponseSchema,
       { method: "POST", signal: options.signal },
+    );
+  }
+
+  undoAgentMutation(
+    runId: string,
+    mutationId: string,
+    request: AgentMutationActionRequest,
+    options: RequestOptions = {},
+  ): Promise<AgentMutationActionResponse> {
+    return this.#agentMutationAction("undo", runId, mutationId, request, options);
+  }
+
+  redoAgentMutation(
+    runId: string,
+    mutationId: string,
+    request: AgentMutationActionRequest,
+    options: RequestOptions = {},
+  ): Promise<AgentMutationActionResponse> {
+    return this.#agentMutationAction("redo", runId, mutationId, request, options);
+  }
+
+  #agentMutationAction(
+    action: "undo" | "redo",
+    runId: string,
+    mutationId: string,
+    request: AgentMutationActionRequest,
+    options: RequestOptions,
+  ): Promise<AgentMutationActionResponse> {
+    const contractPath = `/v1/agent/runs/{id}/mutations/{mutationId}/${action}`;
+    assertAgentIdentifier(runId, contractPath);
+    assertAgentIdentifier(mutationId, contractPath);
+    const parsed = agentMutationActionRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(contractPath);
+    return this.#request(
+      `/v1/agent/runs/${encodeURIComponent(runId)}/mutations/${encodeURIComponent(mutationId)}/${action}`,
+      agentMutationActionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200],
+        validate: (_status, result) => (
+          result.action === action
+          && result.runId === runId
+          && result.targetMutationId === mutationId
+        ),
+      },
     );
   }
 
