@@ -14,9 +14,9 @@ Resolve these before copying any protected visual asset:
 - [ ] List every allowed screenshot, recording, Figma export, icon, illustration, logo, and Orbie asset.
 - [ ] State allowed use: inspect only, derive measurements, modify, redistribute in source, and/or redistribute in built artifacts.
 - [ ] Record prohibited pages/assets and any attribution or expiration conditions.
-- [ ] Ensure no authenticated-page scraping or competitor-private asset enters `references/`.
+- [x] Record the user's attested internal-research permission for protected HyperKnow content. Ordinary interactive inspection is allowed; authentication bypass, bulk extraction, private data retention and redistribution remain prohibited.
 
-2026-07-16 authorization note: the canonical scope is present. The in-app browser plugin could not initialize because its client attempted to redefine a non-configurable runtime `process` property. No HyperKnow page screenshot or visual element has been captured, accepted into the manifest, or used for a parity claim.
+2026-07-16 authorization note: the canonical scope now permits reading the currently visible user-authorized page, screenshot saving, ordinary navigation and implementation use of covered protected visual content for internal research. The permission is a user attestation, not independently verified. The in-app browser client could not initialize because it attempted to redefine a non-configurable runtime `process` property. A desktop-accessibility fallback reached the public sign-in state and then encountered an existing authenticated session; the task stopped without saving a screenshot. A later separate no-session capture did not complete after browser focus changed. No HyperKnow page screenshot or visual element has been accepted into the manifest or used for a parity claim.
 
 ## Missing page references
 
@@ -60,7 +60,7 @@ Status on 2026-07-16: **in progress** at the milestone level; the following live
 | Flashcards | Bundled sample deck; rating remains in UI state and edit is disabled | real due/empty/front/back/source/edit/delete/error states and Again/Hard/Good/Easy schedule results |
 | Learning Feed | Live task/mastery rows are displayed read-only | deterministic rationale breakdown, Start/Complete/Snooze/Reschedule/feedback, mutation rollback and Session create/resume |
 
-No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: canonical authorization is present, but no authorized HyperKnow screenshot/asset has been captured and accepted into the manifest. Continue only with provisional non-branded design values, and do not copy protected brand assets or claim parity.
+No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: canonical authorization is present, but no authorized HyperKnow screenshot/asset has been captured and accepted into the manifest. Covered protected visuals may now be used for internal implementation after capture; until then, continue with provisional non-branded design values and do not claim parity.
 
 2026-07-16 learning-loop Gate 3 note: backend product tools can now read Study
 Feed/due Review rows and complete a Study Task transactionally. The

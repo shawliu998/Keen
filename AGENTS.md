@@ -16,9 +16,12 @@ Build Keen as a real, local-first macOS learning Agent client. The target stack 
 
 ## Authorized design use
 
-- Treat `references/hyperknow/` as usable only after the repository contains an explicit authorized-scope document covering the asset or screen in question.
-- The product brief mentions both `references/authorized-scope.md` and `references/notes/authorized-scope.md`. Until the canonical path is supplied, do not copy protected HyperKnow brand assets.
-- Never scrape authenticated HyperKnow pages, embed the live site, reverse engineer competitors, or copy StudyFetch/AskSia code or private assets.
+- `references/authorized-scope.md` is the canonical authorization record. Treat `references/hyperknow/` as usable when the asset or visible state is covered by that record and its evidence requirements are met.
+- For the authorized HyperKnow source, Codex may, without repeated confirmation, read the currently visible page, capture and save screenshots, and continue ordinary clicks, scrolling, and navigation needed to inspect covered states. Content visible in the live browser immediately before the user's authorization may be used as a reference for implementation.
+- When the user states that permission has been obtained for protected HyperKnow content, record that scope as a user attestation in `references/authorized-scope.md`. Covered protected content may then be captured, stored, analyzed, and adapted for internal research and Keen implementation within the attested scope; do not describe the permission as independently verified unless documentary evidence is present.
+- Interactive inspection of a user-authorized, currently visible page is permitted and is not prohibited scraping. Do not bypass authentication, automate bulk extraction, retain personal or user-generated learning data, embed the live site, copy its implementation code, or inspect browser storage or private network traffic.
+- Covered screenshots and visible UI details may be used to implement Keen layout, styling, interaction organization, and states. Do not ship third-party trademarks, logos, user content, or reference screenshots unless the canonical authorization record explicitly permits redistribution.
+- Truthfulness remains non-waivable: never fabricate screenshots, test results, visual diffs, provenance, authorization evidence, or implementation evidence. Synthetic or mocked artifacts are allowed only when clearly labeled and must never be cited as verification.
 - StudyFetch and AskSia may inform high-level interaction organization only. Do not reuse their trademarks, illustrations, audio, proprietary copy, or implementation.
 - When reference assets are absent, extend the documented provisional design system and record the gap in `docs/VISUAL_TODO.md`.
 

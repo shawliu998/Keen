@@ -55,7 +55,7 @@ Status: **in progress**. The document/import/retrieval/citation portions exist; 
 | Quiz | Three bundled single-choice questions scored in React state | `not started`; no assessment records or mastery/review mutation |
 | Flashcards | Bundled sample cards and in-memory ratings | `not started`; FSRS is not connected |
 | Learning Feed | Real `/v1/demo-state` task/mastery read with no live mutation | `in progress`; candidate generation, rationale and actions are `not started` |
-| Agent | Authenticated create/get/cancel/SSE run API over a durable single-Agent orchestrator, typed tools and audited mutations | `in progress`; real provider, Undo HTTP, frontend consumption and remaining tool groups are open |
+| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools, audited mutations and allowlisted Study Task Undo/Redo HTTP | `in progress`; real provider, visible Agent Activity/Undo and remaining tool groups are open |
 | Mastery | Deterministic BKT accepts only `concept_id` + boolean correctness and writes a basic event | `in progress`; evidence weighting, traceability and algorithm version are `not started` |
 | Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery exist | `in progress`; kill-restart/socket E2E and conversation/session/attempt/review recovery remain open |
 
@@ -86,7 +86,7 @@ The current `app/main.py` exposes:
 - retrieval: `POST /v1/search`, deterministic `POST /v1/query`, and generated `POST /v1/answer/stream` SSE.
 - Agent: authenticated `POST /v1/agent/runs`, `GET /v1/agent/runs/{run_id}`, `POST /v1/agent/runs/{run_id}/cancel`, and durable `GET /v1/agent/runs/{run_id}/events` SSE.
 
-All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation is capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet, and the Agent API has no Undo HTTP resource or frontend client.
+All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation and mutation actions are capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet. The Agent API now has a strict frontend client and allowlisted Study Task Undo/Redo resources, but no visible Agent Activity/Undo UI.
 
 ## Reusable modules and required boundaries
 
@@ -409,7 +409,7 @@ restart replay, cancellation/rollback, transaction and cursor escape attempts,
 cross-table SQL, forged/combined Undo tracking, REPLACE and cascade deletion.
 The restricted session currently supports only `study_tasks` SELECT/UPDATE;
 new Level 2 domains require explicit capability and negative-test expansion.
-Process-restart provider continuation, Undo HTTP and visible frontend Undo,
+Process-restart provider continuation, visible frontend Agent Activity/Undo,
 real provider selection and the remaining product tool groups are still open,
 so Gate 3 remains in progress.
 
@@ -422,8 +422,22 @@ defaults to `provider_missing` when no real provider is configured. Independent
 verification passed the full Python suite 566/566 and the related subset
 105/105; the execution window additionally passed an expanded 113/113 focused
 subset. Ruff lint, Ruff format and `git diff --check` passed. A real provider,
-Undo HTTP resource, strict TypeScript API client/Agent activity UI, and actual
+visible Agent activity/Undo UI and actual
 kill-restart/socket E2E remain open, so this evidence does not close Gate 3.
+
+The next Gate 3 slices added a strict TypeScript Agent run/SSE client plus
+authenticated Study Task Undo/Redo HTTP actions. Client boundaries reject
+unknown fields and hidden reasoning, retain durable event IDs for reconnect,
+and map provider/busy errors without exposing unknown details. Undo/Redo accepts
+only an idempotency key and resolves the recorded allowlisted inverse on the
+trusted side; Level 2 writes, invocation audit and inverse mutations remain
+atomic, while post-terminal Agent events make the action observable. Desktop
+lint, strict typecheck and 124/124 Vitest tests passed, including 61/61 focused
+Agent/API-client tests. Python passed 577/577 and Ruff lint/format passed 117
+files after cross-path semantic-idempotency, declared/chunked request-limit and
+three crash-window recovery hardening passes; final independent review found no
+remaining P0/P1. A visible Agent runtime/UI, real provider and lifecycle E2E are
+still required before Gate 3 can close.
 
 ### Gate 4 — durable Conversation and Deep Learn
 

@@ -10,11 +10,24 @@ this repository. `references/notes/authorized-scope.md` is not canonical.
 - Authorized source: `https://agent.hyperknow.io/`.
 - User instruction: screenshots may be captured and page or visual elements may
   be copied for Keen while work continues.
+- Additional user instruction recorded 2026-07-16: Codex may read the currently
+  visible page, take and save screenshots, continue clicking, scrolling and
+  navigating, and use content that was visible immediately before the instruction
+  as an implementation reference without asking again for each ordinary action.
+- User attestation recorded 2026-07-16: the user states that permission has been
+  obtained to capture protected content for research-only, non-redistributed use.
+  This statement is recorded as user-attested and has not been independently
+  verified from documentary evidence.
 
 ## Allowed use
 
 - Capture the publicly visible, non-user-specific states reachable from the
   authorized source without bypassing authentication.
+- Interactively inspect user-authorized states already visible in the live browser;
+  do not retain account identifiers, personal information or user-generated
+  learning content in screenshots or implementation notes.
+- Capture and analyze protected visual content covered by the user's attested
+  permission for internal research and Keen implementation only.
 - Store screenshots under `references/hyperknow/` as internal design and visual
   regression references.
 - Measure and adapt layout, spacing, typography, color, borders, states and
@@ -24,8 +37,9 @@ this repository. `references/notes/authorized-scope.md` is not canonical.
 
 ## Excluded use
 
-- Do not bypass login, scrape authenticated/private pages, inspect browser
-  storage, or capture another person's account or learning data.
+- Do not bypass login, automate bulk extraction, inspect authenticated states
+  outside the user-attested scope, inspect browser storage, or capture another
+  person's account or learning data.
 - Do not embed the live HyperKnow site or copy its implementation code.
 - Do not ship HyperKnow trademarks, logos, user content or reference screenshots
   in Keen release artifacts unless a later authorization entry explicitly adds
