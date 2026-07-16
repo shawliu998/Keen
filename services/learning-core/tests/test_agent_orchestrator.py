@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator, Mapping
 
 import pytest
@@ -279,6 +280,91 @@ def test_real_sqlite_audit_sink_accepts_persisted_tool_step_foreign_key(tmp_path
     assert invocation["status"] == "succeeded"
     assert invocation["step_id"].startswith("step-")
     assert invocation["idempotency_key"].startswith("tool-")
+
+
+class _ReservationCommitThenRaiseConnection(sqlite3.Connection):
+    raise_after_next_commit = False
+
+    def commit(self) -> None:
+        super().commit()
+        if self.raise_after_next_commit:
+            self.raise_after_next_commit = False
+            raise RuntimeError("driver raised after reservation commit")
+
+
+class _ObservableReadTool(_ReadTool):
+    def __init__(self) -> None:
+        self.executed = False
+
+    async def execute(
+        self, arguments: _ReadArguments, context: ToolContext
+    ) -> ToolResult:
+        self.executed = True
+        return await super().execute(arguments, context)
+
+
+def test_orchestrator_reservation_commit_uncertainty_leaves_no_running_tool(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    connection = sqlite3.connect(
+        database.path,
+        timeout=10.0,
+        factory=_ReservationCommitThenRaiseConnection,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    tool = _ObservableReadTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    sink = SQLiteAuditSink(
+        connection,
+        reconciliation_connection_factory=database.connection,
+    )
+    connection.raise_after_next_commit = True
+    try:
+        asyncio.run(
+            AgentOrchestrator(
+                event_store=AgentEventStore(database),
+                provider=FixedAutomationProvider(
+                    [
+                        ToolCall(
+                            call_id="uncertain-reservation",
+                            tool_name="read_concept",
+                            arguments={"concept_id": "concept-limits"},
+                        ),
+                        ProviderFinished(),
+                    ]
+                ),
+                executor=AgentStepExecutor(registry, sink),
+            ).run("run-1")
+        )
+    finally:
+        connection.close()
+
+    store = AgentEventStore(database)
+    events = store.list_events("run-1")
+    assert store.get_run("run-1")["status"] == "failed"
+    assert tool.executed is False
+    assert not any(
+        event.event_type in {"tool_result", "state_mutation", "done"}
+        for event in events
+    )
+    with database.connection() as durable:
+        repository = AgentRepository(durable)
+        invocation = durable.execute(
+            "SELECT status, error_code FROM tool_invocations"
+        ).fetchone()
+        step = durable.execute("SELECT status, error_code FROM agent_steps").fetchone()
+        assert tuple(invocation) == ("failed", "reservation_commit_uncertain")
+        assert step["status"] == "failed"
+        assert repository.recover_interrupted_runs() == []
+        assert (
+            durable.execute(
+                "SELECT count(*) FROM tool_invocations WHERE status = 'running'"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 class _BlockingProvider:

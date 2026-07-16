@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -100,6 +100,26 @@ class ToolAuditStart(BaseModel):
     )
     permission_level: PermissionLevel
     arguments: AuditSummary
+    idempotency_key: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+    )
+
+
+class ToolAuditReservation(BaseModel):
+    """The durable decision made while claiming an idempotency key."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    disposition: Literal["execute", "replay"]
+    invocation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
+    result_summary: dict[str, object] | None = None
+    mutation_ids: tuple[str, ...] = ()
 
 
 class ToolAuditSuccess(BaseModel):
@@ -138,7 +158,9 @@ class AuditSink(Protocol):
     logs/events, and join the transaction rather than commit independently.
     """
 
-    async def record_started(self, record: ToolAuditStart) -> None: ...
+    async def record_started(
+        self, record: ToolAuditStart
+    ) -> ToolAuditReservation | None: ...
 
     async def record_succeeded(
         self,

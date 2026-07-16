@@ -155,7 +155,7 @@ def test_tool_audit_recursively_redacts_sensitive_arguments_and_summary(reposito
     )
     assert invocation["arguments"]["document_id"] == "document-1"
     assert invocation["arguments"]["chunk_ids"] == ["chunk-1"]
-    assert invocation["arguments"]["context"] == "retrieval"
+    assert invocation["arguments"]["context"] == "[REDACTED:TEXT]"
     assert invocation["arguments"]["nested"]["document_text"] == "[REDACTED]"
     assert invocation["arguments"]["nested"]["source_content"] == "[REDACTED]"
     assert invocation["arguments"]["nested"]["token"] == "[REDACTED]"
@@ -186,6 +186,36 @@ def test_tool_audit_recursively_redacts_sensitive_arguments_and_summary(reposito
             },
             idempotency_key="audit",
         )
+
+
+def test_repository_audit_rejects_identifier_and_reasoning_privacy_bypasses(
+    repository,
+):
+    repo, _ = repository
+    _create_run(repo)
+    invocation = repo.start_tool_invocation(
+        invocation_id="privacy",
+        run_id="run-1",
+        tool_name="search",
+        permission_level=1,
+        arguments={
+            "document_id": "private lesson text with spaces",
+            "concept_ids": ["concept-safe", "student medical details"],
+            "chainOfThought": "private reasoning",
+            "chainofthought": "more private reasoning",
+            "reasoning-trace": "private trace",
+            "unknown_field": "full private source body",
+        },
+        idempotency_key="privacy",
+    )
+    assert invocation["arguments"] == {
+        "chainOfThought": "[REDACTED]",
+        "chainofthought": "[REDACTED]",
+        "concept_ids": ["concept-safe", "[REDACTED:INVALID_ID]"],
+        "document_id": "[REDACTED:INVALID_ID]",
+        "reasoning-trace": "[REDACTED]",
+        "unknown_field": "[REDACTED:TEXT]",
+    }
 
 
 def test_agent_run_rejects_mismatched_conversation_and_session_context(repository):

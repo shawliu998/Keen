@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from .audit import (
     AuditSink,
+    ToolAuditReservation,
     ToolAuditStart,
     ToolAuditSuccess,
     ToolAuditTerminal,
@@ -16,15 +17,17 @@ from .audit import (
     summarize_mutation,
 )
 from .registry import ToolRegistry
+from .transaction import LocalWriteSession
 from .types import (
     PermissionLevel,
     StateMutation,
     ToolArguments,
     ToolContext,
     ToolResult,
+    ToolReplayResult,
 )
 
-TransactionFactory = Callable[[], AsyncContextManager[object]]
+TransactionFactory = Callable[[], AsyncContextManager[LocalWriteSession]]
 
 
 class ToolPermissionError(PermissionError):
@@ -63,12 +66,34 @@ class AgentStepExecutor:
         self,
         *,
         invocation_id: str,
+        idempotency_key: str | None = None,
         tool_name: str,
         arguments: Mapping[str, object],
         context: ToolContext,
-    ) -> ToolResult:
+    ) -> ToolResult | ToolReplayResult:
         tool = self._registry.get(tool_name)
         validated = self._registry.validate_arguments(tool_name, arguments)
+        context.raise_if_cancelled()
+        reservation = await self._audit_sink.record_started(
+            ToolAuditStart(
+                invocation_id=invocation_id,
+                run_id=context.run_id,
+                step_id=context.step_id,
+                tool_name=tool_name,
+                permission_level=tool.permission_level,
+                arguments=summarize_for_audit(validated.model_dump(mode="json")),
+                idempotency_key=idempotency_key or invocation_id,
+            )
+        )
+        if isinstance(reservation, ToolAuditReservation):
+            if reservation.disposition == "replay":
+                return ToolReplayResult(
+                    invocation_id=reservation.invocation_id,
+                    result_summary=reservation.result_summary or {},
+                    mutation_ids=reservation.mutation_ids,
+                )
+            if reservation.invocation_id != invocation_id:
+                raise RuntimeError("audit reservation returned a mismatched invocation")
         terminal = ToolAuditTerminal(
             invocation_id=invocation_id,
             error_code="permission_denied",
@@ -87,17 +112,6 @@ class AgentStepExecutor:
                 "Level 2 tools require a caller-provided transaction context"
             )
 
-        context.raise_if_cancelled()
-        await self._audit_sink.record_started(
-            ToolAuditStart(
-                invocation_id=invocation_id,
-                run_id=context.run_id,
-                step_id=context.step_id,
-                tool_name=tool_name,
-                permission_level=tool.permission_level,
-                arguments=summarize_for_audit(validated.model_dump(mode="json")),
-            )
-        )
         try:
             if tool.permission_level is PermissionLevel.LOCAL_REVERSIBLE:
                 return await self._execute_level_two(

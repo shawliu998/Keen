@@ -100,7 +100,7 @@ def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
 
     applied = database.migrate()
     assert applied[:3] == [6, 7, 8]
-    assert applied[3:] == list(range(9, 18))
+    assert applied[3:] == list(range(9, 19))
     with database.connection() as connection:
         assert (
             connection.execute(
@@ -181,7 +181,7 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
 
     applied = database.migrate()
     assert applied[:2] == [7, 8]
-    assert applied[2:] == list(range(9, 18))
+    assert applied[2:] == list(range(9, 19))
     with database.connection() as connection:
         trigger = connection.execute(
             """
@@ -252,7 +252,7 @@ def test_learning_loop_migrations_preserve_existing_008_learning_state(tmp_path)
         )
         connection.commit()
 
-    assert database.migrate() == list(range(9, 18))
+    assert database.migrate() == list(range(9, 19))
     database.verify_consistency()
     with database.connection() as connection:
         mastery = connection.execute(
@@ -489,3 +489,123 @@ def test_document_migration_upgrades_an_existing_001_database_without_data_loss(
     assert course["title"] == "Keep me"
     assert {1, 2, 4}.issubset(migration_versions)
     assert document_table["name"] == "documents"
+
+
+def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
+    tmp_path,
+):
+    database = Database(tmp_path / "agent-undo-018-forward.sqlite3")
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for version in range(1, 18):
+            path = next(migrations.glob(f"{version:03d}_*.sql"))
+            connection.executescript(path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO schema_migrations(version) VALUES (?)", (version,)
+            )
+        connection.execute(
+            """
+            INSERT INTO agent_runs (
+                id, conversation_id, study_session_id, kind, user_intent, mode,
+                status, provider, model, prompt_version, input_json, error_code,
+                error_detail, idempotency_key, created_at, updated_at,
+                started_at, finished_at
+            ) VALUES (
+                'kept-run', NULL, NULL, 'conversation', 'Keep audit', 'study',
+                'queued', 'local', 'fixture', 'v1', '{}', NULL, NULL,
+                'kept-run-key', '2026-07-16T00:00:00+00:00',
+                '2026-07-16T00:00:00+00:00', NULL, NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO tool_invocations (
+                id, run_id, step_id, tool_name, permission_level, status,
+                arguments_json, arguments_hash, result_summary_json, error_code,
+                error_detail, idempotency_key, created_at, updated_at,
+                started_at, finished_at
+            ) VALUES (
+                'kept-tool', 'kept-run', NULL, 'legacy_local_write', 2,
+                'succeeded', '{}', ?, '{"status":"completed"}', NULL, NULL,
+                'kept-tool-key', '2026-07-16T00:00:00+00:00',
+                '2026-07-16T00:00:00+00:00',
+                '2026-07-16T00:00:00+00:00',
+                '2026-07-16T00:00:00+00:00'
+            )
+            """,
+            ("a" * 64,),
+        )
+        connection.execute(
+            """
+            INSERT INTO state_mutations (
+                id, run_id, tool_invocation_id, ordinal, entity_type,
+                entity_id, operation, before_json, after_json, undo_json,
+                reversible, created_at
+            ) VALUES (
+                'kept-mutation', 'kept-run', 'kept-tool', 0, 'study_task',
+                'kept-task', 'update', '{"status":"upcoming"}',
+                '{"status":"completed"}',
+                '{"operation":"update","entity_type":"study_task","entity_id":"kept-task","restore":{"status":"upcoming"}}',
+                1, '2026-07-16T00:00:00+00:00'
+            )
+            """
+        )
+        connection.commit()
+
+    assert database.migrate() == [18]
+    assert database.migrate() == []
+    database.verify_consistency()
+    with database.connection() as connection:
+        kept = connection.execute(
+            """
+            SELECT id, run_id, tool_invocation_id, entity_type, entity_id,
+                   operation, before_json, after_json, undo_json, reversible,
+                   undone_at, undone_by_tool_invocation_id
+            FROM state_mutations WHERE id = 'kept-mutation'
+            """
+        ).fetchone()
+        versions = [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            )
+        ]
+        trigger_count = connection.execute(
+            """
+            SELECT count(*) FROM sqlite_master
+            WHERE type = 'trigger' AND name IN (
+                'state_mutations_undo_tracking_insert',
+                'state_mutations_undo_tracking_update',
+                'state_mutations_tracked_inverse_insert',
+                'state_mutations_tracked_audit_update',
+                'state_mutations_tracked_audit_delete',
+                'tool_invocations_tracked_undo_update',
+                'tool_invocations_tracked_undo_delete'
+            )
+            """
+        ).fetchone()[0]
+    assert dict(kept) == {
+        "id": "kept-mutation",
+        "run_id": "kept-run",
+        "tool_invocation_id": "kept-tool",
+        "entity_type": "study_task",
+        "entity_id": "kept-task",
+        "operation": "update",
+        "before_json": '{"status":"upcoming"}',
+        "after_json": '{"status":"completed"}',
+        "undo_json": '{"operation":"update","entity_type":"study_task","entity_id":"kept-task","restore":{"status":"upcoming"}}',
+        "reversible": 1,
+        "undone_at": None,
+        "undone_by_tool_invocation_id": None,
+    }
+    assert versions == list(range(1, 19))
+    assert trigger_count == 7

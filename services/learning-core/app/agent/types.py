@@ -9,6 +9,8 @@ from typing import Generic, Literal, Protocol, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .transaction import LocalWriteSession
+
 
 class PermissionLevel(IntEnum):
     """Keen's fail-closed tool permission levels."""
@@ -224,6 +226,28 @@ class ToolResult(BaseModel):
         return value
 
 
+class ToolReplayResult(BaseModel):
+    """A completed invocation was recovered without executing the tool again."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["replay"] = "replay"
+    invocation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=SAFE_IDENTIFIER_PATTERN,
+    )
+    result_summary: dict[str, object]
+    mutation_ids: tuple[str, ...] = Field(default=(), max_length=100)
+
+    @field_validator("result_summary")
+    @classmethod
+    def validate_summary(cls, value: dict[str, object]) -> dict[str, object]:
+        _validate_json_value(value)
+        _reject_hidden_reasoning(value)
+        return value
+
+
 class UntrustedDocument(BaseModel):
     """Document material is data only; it never carries tool instructions."""
 
@@ -244,7 +268,7 @@ class ToolContext:
     step_id: str
     cancellation_event: asyncio.Event
     untrusted_documents: tuple[UntrustedDocument, ...] = ()
-    transaction: object | None = None
+    transaction: LocalWriteSession | None = None
 
     def __post_init__(self) -> None:
         for label, value in (("run_id", self.run_id), ("step_id", self.step_id)):
@@ -268,7 +292,7 @@ class ToolContext:
         if self.cancellation_event.is_set():
             raise asyncio.CancelledError
 
-    def with_transaction(self, transaction: object) -> ToolContext:
+    def with_transaction(self, transaction: LocalWriteSession) -> ToolContext:
         return replace(self, transaction=transaction)
 
 

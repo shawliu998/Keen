@@ -119,7 +119,11 @@ The model may interpret goals, choose registered tools, draft teaching text/ques
 
 ## New domain model and migration order
 
-Status for migrations `009`–`017`: **verified** for forward migration, constraints, repositories, and legacy-row preservation. This is persistence evidence only; it does not claim that the HTTP learning loop or UI exists. Responsibilities remain separate even if implementation discovers that a compatibility table or follow-up index is necessary.
+Status for migrations `009`–`018`: **verified** for forward migration,
+constraints, repositories, and legacy-row preservation. This is persistence
+evidence only; it does not claim that the HTTP learning loop or UI exists.
+Responsibilities remain separate even if implementation discovers that a
+compatibility table or follow-up index is necessary.
 
 | Migration | New or extended entities | Compatibility and invariants |
 | --- | --- | --- |
@@ -132,6 +136,7 @@ Status for migrations `009`–`017`: **verified** for forward migration, constra
 | `015_review_items.sql` | `review_items`, `review_attempts`, `review_schedules` | FSRS state is separate from concept mastery; idempotent schedule writes; UTC timestamps and scheduler version |
 | `016_study_plans.sql` | additive `study_tasks` source/priority/rationale/schedule/completion/feedback fields and `study_task_feedback` (the filename follows the requested migration sequence; its bounded responsibility is Feed/task planning state) | Preserve existing tasks/statuses with compatible backfill; store explainable priority components and source identity; no calendar write |
 | `017_review_fsrs_identity.sql` | additive stable identity and validated adapter state for `review_schedules` | Preserve applied 015 data; backfill a unique positive `fsrs_card_id`; make pristine new rows restartable under the pinned Keen v1 scheduler; enforce identity/state agreement without rewriting migration 015 |
+| `018_agent_undo_tracking.sql` | additive Undo lifecycle fields and tamper-resistant tracking for `state_mutations` | Preserve existing audit rows; require one dedicated succeeded Level 2 inverse in the same run; reject pretracked inserts, repeated Undo, forged relationships and post-Undo mutation/invocation changes |
 
 Every JSON text column must pass Pydantic/Zod validation at the boundary and `json_valid` where SQLite supports the invariant. Use foreign keys, status checks, indexes for recovery and due queries, transactionally consistent writes, and explicit `created_at`/`updated_at`. Migration tests must cover empty database, `001` legacy database, current `008` database with user rows, repeated startup, constraint failure and interrupted upgrade. No destructive reset is an accepted recovery action.
 
@@ -139,15 +144,18 @@ Every JSON text column must pass Pydantic/Zod validation at the boundary and `js
 
 Status: **in progress**. Persistence repositories plus the typed registry,
 permission/effect checks, bounded tool contracts, cancellable single-step
-executor, atomic Level 2 transaction handoff, typed inverse mutation and
-redacted audit boundary are verified as a foundation. Initial typed product
-tools can read real Study Feed and due-Review rows, complete a course-scoped
-Study Task inside the caller transaction, and keep export at unavailable Level
+executor, typed inverse mutation and redacted audit boundary are verified as a
+foundation. Initial typed product tools can read real Study Feed and due-Review
+rows, complete a course-scoped Study Task, and keep export at unavailable Level
 3. A single-provider orchestrator service persists ordered public events and
 supports durable SSE cursor replay, bounded streams, tool-step lifecycle and
-cancellation/error terminal states. SQLite AuditSink integration,
-replay/idempotency and Undo execution are `in progress`; FastAPI routes,
-process-restart provider continuation, UI and real provider selection remain
+cancellation/error terminal states. A SQLite audit adapter reserves
+idempotency keys, commits Level 2 writes with typed mutation records, reconciles
+uncertain commits, replays completed invocations without repeating writes and
+executes allowlisted Study Task Undo/redo. Its restricted tool session exposes
+only `study_tasks` SELECT/UPDATE and denies transaction control or cross-table
+access. FastAPI routes, process-restart provider continuation, UI, visible Undo
+controls, remaining tool groups and real provider selection remain
 `not started`.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
@@ -370,9 +378,7 @@ Foundation evidence: registry/executor plus the existing Agent repository tests
 passed 35/35 with one existing Starlette warning; Ruff lint/format and
 `git diff --check` passed. Independent review found and verified fixes for ID
 content leaking into audit, disguised hidden-reasoning keys, non-executable Undo
-payloads, and loss of raw typed mutations at the persistence boundary. Replay,
-real SQLite audit integration, Undo execution, orchestration and SSE remain
-explicitly unverified, so Gate 3 is not complete.
+payloads, and loss of raw typed mutations at the persistence boundary.
 
 The initial product-tool subset passed 6/6 focused tests against real SQLite
 rows, including course scoping, UTC validation, transaction rollback and typed
@@ -385,6 +391,21 @@ ordered redacted events, real step foreign keys/status, stable tool replay,
 Last-Event-ID continuation, cancellation races, global single-run enforcement
 and action/content/payload limits. It does not resume provider execution after
 a process restart and therefore does not satisfy the full Gate exit.
+
+The SQLite audit/replay/Undo slice now has atomic idempotency reservation,
+completed replay, uncertain-commit reconciliation, typed mutation persistence,
+allowlisted Study Task Undo/redo, migration 018 tamper constraints and a
+restricted SQLite authorizer-backed tool session. The final full Python suite
+passed 548/548 with one existing Starlette warning; Ruff lint and format passed
+all 109 learning-core Python files. Independent adversarial review passed 59/59
+focused tests and found no remaining P0/P1 after verifying concurrent claims,
+restart replay, cancellation/rollback, transaction and cursor escape attempts,
+cross-table SQL, forged/combined Undo tracking, REPLACE and cascade deletion.
+The restricted session currently supports only `study_tasks` SELECT/UPDATE;
+new Level 2 domains require explicit capability and negative-test expansion.
+FastAPI Agent routes, process-restart provider continuation, visible frontend
+Undo, real provider selection and the remaining product tool groups are still
+open, so Gate 3 remains in progress.
 
 ### Gate 4 — durable Conversation and Deep Learn
 
@@ -430,7 +451,7 @@ Status: **in progress**. The pinned FSRS dependency passed isolated lock,
 license, import and PyInstaller one-file checks; the latest adapter/migration
 still requires the final Gate 7 `.app`/`.dmg` rebuild and mounted smoke.
 
-Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`017` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
+Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`018` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
 
 ## Risks and mitigations
 

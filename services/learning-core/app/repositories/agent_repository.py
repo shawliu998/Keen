@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
@@ -17,6 +18,11 @@ class MutationInput(TypedDict):
     after: NotRequired[JsonValue]
     undo: NotRequired[JsonValue]
     reversible: NotRequired[bool]
+
+
+class ToolReservation(TypedDict):
+    invocation: dict
+    created: bool
 
 
 _RUN_TRANSITIONS = {
@@ -43,23 +49,32 @@ def _object_json(value: object, *, label: str) -> str:
 
 
 _SENSITIVE_AUDIT_KEYS = {
+    "analysis",
     "answer",
     "api_key",
     "body",
     "chunks",
     "content",
+    "chain_of_thought",
     "document",
     "document_text",
     "full_text",
+    "hidden_reasoning",
+    "internal_reasoning",
     "password",
     "path",
     "private_data",
     "prompt",
+    "reasoning",
+    "reasoning_trace",
+    "scratchpad",
     "secret",
     "source_content",
     "text",
     "token",
+    "thoughts",
 }
+_SENSITIVE_AUDIT_COMPACT_KEYS = {key.replace("_", "") for key in _SENSITIVE_AUDIT_KEYS}
 _SENSITIVE_AUDIT_SUFFIXES = (
     "_answer",
     "_body",
@@ -71,14 +86,42 @@ _SENSITIVE_AUDIT_SUFFIXES = (
     "_text",
     "_token",
 )
+_SAFE_AUDIT_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_SAFE_AUDIT_ENUM_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SAFE_AUDIT_TEXT_KEYS = {
+    "effect",
+    "entity_type",
+    "format",
+    "kind",
+    "mode",
+    "operation",
+    "status",
+    "tool_name",
+    "type",
+}
+_CAMEL_CASE_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_NON_ALPHANUMERIC_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _canonical_audit_key(key: str) -> str:
+    with_boundaries = _CAMEL_CASE_BOUNDARY_RE.sub("_", key)
+    return _NON_ALPHANUMERIC_RE.sub("_", with_boundaries).strip("_").lower()
+
+
+def _is_sensitive_audit_key(key: str) -> bool:
+    canonical = _canonical_audit_key(key)
+    compact = canonical.replace("_", "")
+    return (
+        canonical in _SENSITIVE_AUDIT_KEYS
+        or compact in _SENSITIVE_AUDIT_COMPACT_KEYS
+        or canonical.endswith(_SENSITIVE_AUDIT_SUFFIXES)
+    )
 
 
 def _redact_audit_value(value: JsonValue, *, key: str = "") -> JsonValue:
-    lowered = key.lower()
-    is_identifier = lowered.endswith("_id") or lowered.endswith("_ids")
-    if not is_identifier and (
-        lowered in _SENSITIVE_AUDIT_KEYS or lowered.endswith(_SENSITIVE_AUDIT_SUFFIXES)
-    ):
+    canonical = _canonical_audit_key(key)
+    is_identifier = canonical.endswith("_id") or canonical.endswith("_ids")
+    if not is_identifier and _is_sensitive_audit_key(key):
         return "[REDACTED]"
     if isinstance(value, dict):
         return {
@@ -86,9 +129,16 @@ def _redact_audit_value(value: JsonValue, *, key: str = "") -> JsonValue:
             for child_key, child in value.items()
         }
     if isinstance(value, list):
-        return [_redact_audit_value(child) for child in value]
-    if isinstance(value, str) and len(value) > 2_000:
-        return "[REDACTED:LONG_STRING]"
+        child_key = canonical[:-1] if canonical.endswith("_ids") else ""
+        return [_redact_audit_value(child, key=child_key) for child in value]
+    if isinstance(value, str) and is_identifier:
+        if _SAFE_AUDIT_IDENTIFIER_RE.fullmatch(value) is None:
+            return "[REDACTED:INVALID_ID]"
+        return value
+    if isinstance(value, str):
+        if canonical in _SAFE_AUDIT_TEXT_KEYS and _SAFE_AUDIT_ENUM_RE.fullmatch(value):
+            return value
+        return "[REDACTED:TEXT]"
     return value
 
 
@@ -392,11 +442,53 @@ class AgentRepository:
     ) -> dict:
         if permission_level not in {1, 2, 3}:
             raise ValueError("invalid permission level")
+        serialized_arguments, arguments_hash = _audit_object(
+            arguments, label="tool arguments"
+        )
+        reservation = self.reserve_tool_invocation(
+            invocation_id=invocation_id,
+            run_id=run_id,
+            tool_name=tool_name,
+            permission_level=permission_level,
+            arguments_summary=load_json(serialized_arguments),
+            arguments_hash=arguments_hash,
+            idempotency_key=idempotency_key,
+            step_id=step_id,
+            commit=commit,
+        )
+        return reservation["invocation"]
+
+    def reserve_tool_invocation(
+        self,
+        *,
+        invocation_id: str,
+        run_id: str,
+        tool_name: str,
+        permission_level: int,
+        arguments_summary: dict[str, JsonValue],
+        arguments_hash: str,
+        idempotency_key: str,
+        step_id: str | None = None,
+        commit: bool = True,
+    ) -> ToolReservation:
+        """Atomically claim an invocation idempotency key.
+
+        The caller supplies a bounded redacted summary plus the SHA-256 of the
+        original validated arguments. The hash, rather than the redacted form,
+        distinguishes payloads that redact to the same value.
+        """
+
+        if permission_level not in {1, 2, 3}:
+            raise ValueError("invalid permission level")
+        if len(arguments_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in arguments_hash
+        ):
+            raise ValueError("arguments hash must be lowercase SHA-256")
+        serialized_arguments = _audit_object(
+            arguments_summary, label="tool argument summary"
+        )[0]
         now = _now()
         with write_scope(self.connection, commit=commit):
-            serialized_arguments, arguments_hash = _audit_object(
-                arguments, label="tool arguments"
-            )
             existing = self.connection.execute(
                 "SELECT * FROM tool_invocations WHERE run_id = ? AND idempotency_key = ?",
                 (run_id, idempotency_key),
@@ -416,7 +508,10 @@ class AgentRepository:
                     raise ValueError(
                         "idempotency key was reused with different tool arguments"
                     )
-                return self.get_tool_invocation(existing["id"])
+                return {
+                    "invocation": self.get_tool_invocation(existing["id"]),
+                    "created": False,
+                }
             self.connection.execute(
                 """
                 INSERT INTO tool_invocations
@@ -439,7 +534,10 @@ class AgentRepository:
                     now,
                 ),
             )
-        return self.get_tool_invocation(invocation_id)
+        return {
+            "invocation": self.get_tool_invocation(invocation_id),
+            "created": True,
+        }
 
     def get_tool_invocation(self, invocation_id: str) -> dict:
         return self._get_json_row(
@@ -447,6 +545,16 @@ class AgentRepository:
             invocation_id,
             ("arguments_json", "result_summary_json"),
         )
+
+    def find_tool_invocation(self, *, run_id: str, idempotency_key: str) -> dict | None:
+        row = self.connection.execute(
+            """
+            SELECT id FROM tool_invocations
+            WHERE run_id = ? AND idempotency_key = ?
+            """,
+            (run_id, idempotency_key),
+        ).fetchone()
+        return self.get_tool_invocation(str(row["id"])) if row is not None else None
 
     def complete_tool_invocation(
         self,
@@ -519,6 +627,167 @@ class AgentRepository:
                     ),
                 )
         return self.get_tool_invocation(invocation_id)
+
+    def finish_tool_invocation(
+        self,
+        invocation_id: str,
+        *,
+        status: str,
+        error_code: str,
+        commit: bool = True,
+    ) -> dict:
+        if status not in {"failed", "cancelled", "denied"}:
+            raise ValueError("invalid terminal tool status")
+        now = _now()
+        with write_scope(self.connection, commit=commit):
+            cursor = self.connection.execute(
+                """
+                UPDATE tool_invocations
+                SET status = ?, error_code = ?, error_detail = NULL,
+                    updated_at = ?, finished_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (status, error_code, now, now, invocation_id),
+            )
+            if cursor.rowcount != 1:
+                row = self.connection.execute(
+                    "SELECT status FROM tool_invocations WHERE id = ?",
+                    (invocation_id,),
+                ).fetchone()
+                if row is None:
+                    raise LookupError("tool invocation not found")
+                raise ValueError(f"only a running tool invocation can become {status}")
+        return self.get_tool_invocation(invocation_id)
+
+    def list_state_mutations(self, invocation_id: str) -> list[dict]:
+        rows = self.connection.execute(
+            """
+            SELECT id, run_id, tool_invocation_id, ordinal, entity_type,
+                   entity_id, operation, before_json, after_json, undo_json,
+                   reversible, created_at, undone_at,
+                   undone_by_tool_invocation_id
+            FROM state_mutations
+            WHERE tool_invocation_id = ? ORDER BY ordinal
+            """,
+            (invocation_id,),
+        ).fetchall()
+        return [self._decode_mutation_row(row) for row in rows]
+
+    def get_state_mutation(self, mutation_id: str) -> dict:
+        row = self.connection.execute(
+            """
+            SELECT id, run_id, tool_invocation_id, ordinal, entity_type,
+                   entity_id, operation, before_json, after_json, undo_json,
+                   reversible, created_at, undone_at,
+                   undone_by_tool_invocation_id
+            FROM state_mutations WHERE id = ?
+            """,
+            (mutation_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("state mutation not found")
+        return self._decode_mutation_row(row)
+
+    def mark_state_mutation_undone(
+        self,
+        mutation_id: str,
+        *,
+        undo_invocation_id: str,
+        commit: bool = True,
+    ) -> dict:
+        now = _now()
+        with write_scope(self.connection, commit=commit):
+            original = self.get_state_mutation(mutation_id)
+            self._validate_undo_relationship(
+                original, undo_invocation_id=undo_invocation_id
+            )
+            cursor = self.connection.execute(
+                """
+                UPDATE state_mutations
+                SET undone_at = ?, undone_by_tool_invocation_id = ?
+                WHERE id = ? AND reversible = 1 AND undone_at IS NULL
+                """,
+                (now, undo_invocation_id, mutation_id),
+            )
+            if cursor.rowcount != 1:
+                row = self.connection.execute(
+                    "SELECT reversible, undone_at FROM state_mutations WHERE id = ?",
+                    (mutation_id,),
+                ).fetchone()
+                if row is None:
+                    raise LookupError("state mutation not found")
+                if not row["reversible"]:
+                    raise PermissionError("state mutation is not reversible")
+                raise ValueError("state mutation has already been undone")
+        return self.get_state_mutation(mutation_id)
+
+    def _validate_undo_relationship(
+        self, original: dict, *, undo_invocation_id: str
+    ) -> None:
+        invocation = self.get_tool_invocation(undo_invocation_id)
+        if (
+            invocation["id"] == original["tool_invocation_id"]
+            or invocation["run_id"] != original["run_id"]
+            or invocation["permission_level"] != 2
+            or invocation["status"] != "succeeded"
+            or invocation["tool_name"] != "undo_state_mutation"
+            or invocation["arguments"].get("mutation_id") != original["id"]
+        ):
+            raise PermissionError(
+                "undo requires its dedicated succeeded invocation for this mutation"
+            )
+        inverses = self.list_state_mutations(undo_invocation_id)
+        if len(inverses) != 1:
+            raise PermissionError("undo invocation must contain exactly one inverse")
+        inverse = inverses[0]
+        undo = original.get("undo")
+        inverse_undo = inverse.get("undo")
+        if not isinstance(undo, dict) or not isinstance(inverse_undo, dict):
+            raise PermissionError("undo audit is missing typed inverse data")
+        if (
+            original["entity_type"] != "study_task"
+            or original["operation"] != "update"
+            or undo.get("operation") != "update"
+            or undo.get("entity_type") != original["entity_type"]
+            or undo.get("entity_id") != original["entity_id"]
+            or inverse["run_id"] != original["run_id"]
+            or inverse["entity_type"] != original["entity_type"]
+            or inverse["entity_id"] != original["entity_id"]
+            or inverse["operation"] != undo.get("operation")
+            or inverse["before"] != original["after"]
+            or inverse_undo.get("operation") != original["operation"]
+            or inverse_undo.get("entity_type") != original["entity_type"]
+            or inverse_undo.get("entity_id") != original["entity_id"]
+            or inverse_undo.get("restore") != inverse["before"]
+        ):
+            raise PermissionError(
+                "undo invocation does not contain the recorded inverse mutation"
+            )
+        original_before = original.get("before")
+        original_after = original.get("after")
+        inverse_after = inverse.get("after")
+        if not all(
+            isinstance(value, dict)
+            for value in (original_before, original_after, inverse_after)
+        ):
+            raise PermissionError("study task undo requires object snapshots")
+        technical = {"revision", "updated_at"}
+        expected_business = {
+            key: value for key, value in original_before.items() if key not in technical
+        }
+        inverse_business = {
+            key: value for key, value in inverse_after.items() if key not in technical
+        }
+        original_revision = original_after.get("revision")
+        if (
+            expected_business != inverse_business
+            or not isinstance(original_revision, int)
+            or isinstance(original_revision, bool)
+            or inverse_after.get("revision") != original_revision + 1
+        ):
+            raise PermissionError(
+                "undo invocation does not contain the recorded inverse mutation"
+            )
 
     def request_approval(
         self,
@@ -615,4 +884,15 @@ class AgentRepository:
             result[column.removesuffix("_json")] = (
                 load_json(value) if value is not None else None
             )
+        return result
+
+    @staticmethod
+    def _decode_mutation_row(row: sqlite3.Row) -> dict:
+        result = dict(row)
+        for column in ("before_json", "after_json", "undo_json"):
+            value = result.pop(column)
+            result[column.removesuffix("_json")] = (
+                load_json(value) if value is not None else None
+            )
+        result["reversible"] = bool(result["reversible"])
         return result

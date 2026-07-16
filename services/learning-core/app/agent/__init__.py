@@ -2,6 +2,7 @@ from .audit import (
     AuditSink,
     AuditSummary,
     ToolAuditStart,
+    ToolAuditReservation,
     ToolAuditSuccess,
     ToolAuditTerminal,
     summarize_for_audit,
@@ -14,6 +15,12 @@ from .executor import (
     TransactionFactory,
 )
 from .registry import ToolNotFoundError, ToolRegistrationError, ToolRegistry
+from .sqlite_audit import (
+    InFlightInvocationError,
+    SQLiteAuditSink,
+    TerminalInvocationError,
+)
+from .transaction import LocalWriteSession, SQLiteToolResult, SQLiteToolSession
 from .types import (
     AgentTool,
     PermissionLevel,
@@ -22,8 +29,16 @@ from .types import (
     ToolContext,
     ToolEffect,
     ToolResult,
+    ToolReplayResult,
     UndoInstruction,
     UntrustedDocument,
+)
+from .undo import (
+    StudyTaskUndoHandler,
+    UndoExecutor,
+    UndoHandler,
+    UndoRegistry,
+    default_undo_registry,
 )
 
 __all__ = [
@@ -32,10 +47,16 @@ __all__ = [
     "AuditSink",
     "AuditSummary",
     "ConfirmationRequiredError",
+    "InFlightInvocationError",
+    "LocalWriteSession",
     "PermissionLevel",
     "StateMutation",
+    "SQLiteAuditSink",
+    "SQLiteToolResult",
+    "SQLiteToolSession",
     "ToolArguments",
     "ToolAuditStart",
+    "ToolAuditReservation",
     "ToolAuditSuccess",
     "ToolAuditTerminal",
     "ToolContext",
@@ -46,8 +67,15 @@ __all__ = [
     "ToolRegistrationError",
     "ToolRegistry",
     "ToolResult",
+    "ToolReplayResult",
+    "TerminalInvocationError",
+    "StudyTaskUndoHandler",
     "TransactionFactory",
     "UndoInstruction",
+    "UndoExecutor",
+    "UndoHandler",
+    "UndoRegistry",
     "UntrustedDocument",
+    "default_undo_registry",
     "summarize_for_audit",
 ]

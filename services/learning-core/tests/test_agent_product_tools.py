@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.agent import ToolContext, ToolRegistry
+from app.agent import SQLiteAuditSink, ToolContext, ToolRegistry
 from app.agent.tools import (
     CompleteStudyTaskArguments,
     CompleteStudyTaskTool,
@@ -159,9 +159,21 @@ def test_complete_task_uses_caller_transaction_and_returns_executable_undo(tmp_p
     with pytest.raises(RuntimeError, match="SQLite transaction"):
         asyncio.run(tool.execute(arguments, _context()))
 
+    async def exercise(connection):
+        sink = SQLiteAuditSink(connection)
+        try:
+            async with sink.transaction() as transaction:
+                result = await tool.execute(
+                    arguments, _context(transaction=transaction)
+                )
+                raise RuntimeError("force test rollback")
+        except RuntimeError as error:
+            if str(error) != "force test rollback":
+                raise
+            return result
+
     with database.connection() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        result = asyncio.run(tool.execute(arguments, _context(transaction=connection)))
+        result = asyncio.run(exercise(connection))
         assert result.output == {
             "task_id": "agent-task",
             "status": "completed",
@@ -171,7 +183,6 @@ def test_complete_task_uses_caller_transaction_and_returns_executable_undo(tmp_p
         assert mutation.before["status"] == "upcoming"
         assert mutation.after["status"] == "completed"
         assert mutation.undo.restore == mutation.before
-        connection.rollback()
 
     with database.connection() as connection:
         assert TaskRepository(connection).get("agent-task")["status"] == "upcoming"
@@ -180,21 +191,22 @@ def test_complete_task_uses_caller_transaction_and_returns_executable_undo(tmp_p
 def test_complete_task_rejects_cross_course_scope_before_mutation(tmp_path):
     database = _database(tmp_path)
     _create_task(database)
-    with database.connection() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        with pytest.raises(LookupError, match="requested course"):
-            asyncio.run(
-                CompleteStudyTaskTool().execute(
-                    CompleteStudyTaskArguments(
-                        task_id="agent-task",
-                        course_id="course-physics",
-                        expected_revision=0,
-                        completed_at=NOW,
-                    ),
-                    _context(transaction=connection),
-                )
+
+    async def exercise(connection):
+        async with SQLiteAuditSink(connection).transaction() as transaction:
+            await CompleteStudyTaskTool().execute(
+                CompleteStudyTaskArguments(
+                    task_id="agent-task",
+                    course_id="course-physics",
+                    expected_revision=0,
+                    completed_at=NOW,
+                ),
+                _context(transaction=transaction),
             )
-        connection.rollback()
+
+    with database.connection() as connection:
+        with pytest.raises(LookupError, match="requested course"):
+            asyncio.run(exercise(connection))
 
     with database.connection() as connection:
         assert TaskRepository(connection).get("agent-task")["status"] == "upcoming"

@@ -21,6 +21,7 @@ from ..types import (
     ToolEffect,
     ToolResult,
 )
+from ..transaction import SQLiteToolSession
 
 ConnectionFactory = Callable[[], AbstractContextManager[sqlite3.Connection]]
 
@@ -174,7 +175,7 @@ class CompleteStudyTaskTool:
         self, arguments: CompleteStudyTaskArguments, context: ToolContext
     ) -> ToolResult:
         context.raise_if_cancelled()
-        if not isinstance(context.transaction, sqlite3.Connection):
+        if not isinstance(context.transaction, SQLiteToolSession):
             raise RuntimeError("complete_study_task requires a SQLite transaction")
         repository = TaskRepository(context.transaction)
         before = repository.get(arguments.task_id)

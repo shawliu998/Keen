@@ -67,6 +67,11 @@ replay at the service layer, but no Agent route or frontend surface consumes
 that stream. Therefore the visual rows above remain `not started`; no
 screenshot, reference comparison or parity result is claimed.
 
+The backend now also persists completed Level 2 mutations and can execute an
+allowlisted Study Task Undo/redo after validating the current revision. There
+is still no visible Undo action, optimistic rollback state, Agent activity
+surface or restart-recovery UI, so this adds no visual acceptance evidence.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

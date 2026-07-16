@@ -279,5 +279,5 @@ def test_level_three_is_fail_closed_and_never_executes():
             )
         )
     assert tool.executed is False
-    assert not audit.started
+    assert audit.started[0].permission_level is PermissionLevel.CONFIRM_FIRST
     assert audit.rejected[0].error_code == "permission_denied"
