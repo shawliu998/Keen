@@ -100,7 +100,7 @@ def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
 
     applied = database.migrate()
     assert applied[:3] == [6, 7, 8]
-    assert applied[3:] == list(range(9, 17))
+    assert applied[3:] == list(range(9, 18))
     with database.connection() as connection:
         assert (
             connection.execute(
@@ -181,7 +181,7 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
 
     applied = database.migrate()
     assert applied[:2] == [7, 8]
-    assert applied[2:] == list(range(9, 17))
+    assert applied[2:] == list(range(9, 18))
     with database.connection() as connection:
         trigger = connection.execute(
             """
@@ -252,7 +252,7 @@ def test_learning_loop_migrations_preserve_existing_008_learning_state(tmp_path)
         )
         connection.commit()
 
-    assert database.migrate() == list(range(9, 17))
+    assert database.migrate() == list(range(9, 18))
     database.verify_consistency()
     with database.connection() as connection:
         mastery = connection.execute(

@@ -12,6 +12,8 @@ The pdfminer.six 20260107 integration is an unmodified package dependency at exa
 
 The HTTPX 0.28.1 integration is an unmodified package dependency at exact tag commit `26d48e0634e6ee9cdc0533996db289ce4b430177`. No HTTPX source file is copied, ported, vendored, or patched in Keen, so it has no patch entry; its exact wheel, license, transitive-resolution snapshot, and Python 3.11/PyInstaller evidence are recorded in `docs/OPEN_SOURCE_INVENTORY.md` and `THIRD_PARTY_NOTICES.md`.
 
+The py-fsrs 6.3.1 integration is an unmodified package dependency at exact tag commit `3abe686e9c058d3f3c00bbeb92e68b71211b2b31`. No py-fsrs source file is copied, ported, vendored, or patched in Keen, so it has no patch entry; its exact wheel, MIT license, runtime-dependency boundary, Python 3.11/PyInstaller evidence, and Keen-owned adapter are recorded in `docs/OPEN_SOURCE_INVENTORY.md` and `THIRD_PARTY_NOTICES.md`.
+
 ## Recording rules
 
 Create an entry before or in the same change that introduces modified upstream source. One entry may cover a coherent patch series only when all files share the same upstream revision and license.

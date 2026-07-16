@@ -11,6 +11,7 @@ All notable changes to Keen are documented here. Status statements must reflect 
 ### Added
 
 - Forward-only learning-loop migrations 009–016 and typed persistence repositories for Conversation, Agent run/tool/mutation audit, Study Sessions and versioned plans, Assessment attempts/hints/evaluations, mastery evidence, misconceptions, Review/FSRS state, and explainable Study Tasks. Gate 1 preserves legacy learning rows and has repository/migration evidence only; no live learning-loop UI or Agent execution is claimed yet.
+- Forward migration 017 and a pinned py-fsrs 6.3.1 adapter add stable positive review-card identities, upgrade pristine 015 schedules without deleting data, enforce UTC/version/state boundaries, and make repository-created schedules restart-round-trippable. Focused scheduler/repository/migration/vector tests passed 43/43, and the stable full Python suite passed 500/500 with one existing Starlette warning. This is deterministic scheduler/repository evidence only; the Flashcards UI and full assessment-to-review workflow remain open.
 
 - Repository-wide engineering, security, permission, provenance, and verification rules in `AGENTS.md`.
 - Initial empty-repository and missing-reference audit.
@@ -57,5 +58,5 @@ All notable changes to Keen are documented here. Status statements must reflect 
 - HyperKnow pixel parity remains blocked because references and the canonical authorized-scope file are absent.
 - The initial development bundles were ad-hoc/linker-signed, not notarized, and omitted the Python sidecar. The current arm64 app/DMG include the sidecar and use valid ordinary ad-hoc seals for local verification; hardened runtime is deliberately disabled on this no-Team-ID path so the PyInstaller one-file dylibs can load. Gatekeeper rejects the artifact. Intel/Universal builds and the same-Team Developer ID hardened-runtime/notarization path are unverified.
 - OCR, reranking, and citation entailment validation are not implemented. PDF highlights are supported only where validated zero-origin, unrotated, unit-scale MediaBox/CropBox geometry is available; other pages explicitly fall back to page navigation without a highlight. The frozen local embedding/hybrid, loopback chat, PDF geometry/content, and vector stacks were verified inside the final mounted DMG.
-- Agent orchestration/tool permissions, providers/Keychain, FSRS, calendar/notifications, complete persistence, automated GUI lifecycle E2E, accessibility/performance, and complete shipped notices remain open.
+- Agent orchestration/tool permissions, providers/Keychain, the FSRS-backed Flashcards/assessment workflow, calendar/notifications, complete persistence, automated GUI lifecycle E2E, accessibility/performance, and complete shipped notices remain open.
 - HyperKnow references and the canonical authorized-scope file remain absent, so pixel parity is still blocked and no mismatch threshold is claimed.

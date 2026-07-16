@@ -12,6 +12,7 @@ readonly CHARSET_NORMALIZER_VERSION="3.4.9"
 readonly CFFI_VERSION="2.1.0"
 readonly PYCPARSER_VERSION="3.0"
 readonly HTTPX_VERSION="0.28.1"
+readonly FSRS_VERSION="6.3.1"
 readonly PYPDF_VERSION="6.14.2"
 readonly PYTHON_MULTIPART_VERSION="0.0.32"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -63,7 +64,8 @@ if ! "${PYTHON_BIN}" - "${LOCK_FILE}" \
   "${PYCPARSER_VERSION}" \
   "${HTTPX_VERSION}" \
   "${PYPDF_VERSION}" \
-  "${PYTHON_MULTIPART_VERSION}" <<'PY'
+  "${PYTHON_MULTIPART_VERSION}" \
+  "${FSRS_VERSION}" <<'PY'
 import re
 import sys
 import tomllib
@@ -116,6 +118,7 @@ expected = {
     "httpx": sys.argv[8],
     "pypdf": sys.argv[9],
     "python-multipart": sys.argv[10],
+    "fsrs": sys.argv[11],
 }
 for name, required in expected.items():
     if versions.get(name) != required:
@@ -191,6 +194,7 @@ for module in (
     "app.answer_service",
     "app.local_chat_providers",
     "app.local_providers",
+    "app.review.scheduler",
     "pdfminer.high_level",
     "pdfminer.layout",
     "cryptography.hazmat.bindings._rust",
@@ -201,6 +205,7 @@ for module in (
     "certifi",
     "idna",
     "h11",
+    "fsrs",
     "sqlite_vec",
 ):
     importlib.import_module(module)
@@ -236,6 +241,7 @@ pyinstaller_command=(
   --hidden-import app.answer_service
   --hidden-import app.local_chat_providers
   --hidden-import app.local_providers
+  --hidden-import app.review.scheduler
   --hidden-import cryptography.hazmat.bindings._rust
   --hidden-import httpx
   --hidden-import httpcore
@@ -243,6 +249,7 @@ pyinstaller_command=(
   --hidden-import certifi
   --hidden-import idna
   --hidden-import h11
+  --hidden-import fsrs
   --hidden-import cffi
   --hidden-import pycparser
   --add-data "${SERVICE_ROOT}/migrations:migrations"

@@ -4,7 +4,12 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
+from app.review.scheduler import Schedule
+
 from . import dump_json, load_json, write_scope
+
+
+_MAX_SQLITE_INTEGER = (1 << 63) - 1
 
 
 def _now() -> str:
@@ -13,6 +18,18 @@ def _now() -> str:
 
 def _json(value: Any) -> str:
     return dump_json(value)
+
+
+def _utc_iso(value: str, *, field: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field} must be a valid ISO 8601 datetime") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware UTC")
+    if parsed.utcoffset().total_seconds() != 0:
+        raise ValueError(f"{field} must be UTC")
+    return parsed.astimezone(UTC).isoformat()
 
 
 def _decode_item(row: sqlite3.Row) -> dict[str, Any]:
@@ -44,6 +61,7 @@ def _schedule_snapshot(row: sqlite3.Row) -> dict[str, Any]:
         "scheduler": str(row["scheduler"]),
         "scheduler_version": str(row["scheduler_version"]),
         "scheduler_state": load_json(row["scheduler_state_json"]),
+        "fsrs_card_id": int(row["fsrs_card_id"]),
         "revision": int(row["revision"]),
         "updated_at": str(row["updated_at"]),
     }
@@ -75,6 +93,8 @@ class ReviewRepository:
         created_at: str | None = None,
         commit: bool = True,
     ) -> tuple[dict[str, Any], bool]:
+        if scheduler_state:
+            raise ValueError("review scheduler state is assigned internally")
         creation_payload = {
             "id": item_id,
             "course_id": course_id,
@@ -90,20 +110,34 @@ class ReviewRepository:
             "stability": stability,
             "scheduler_state": scheduler_state or {},
         }
-        existing = self._item_by_idempotency_key(idempotency_key)
-        if existing is not None:
-            if existing["creation_payload"] != creation_payload:
-                raise ValueError("review item idempotency key was reused")
-            return existing, False
-
-        timestamp = created_at or _now()
+        timestamp = _utc_iso(created_at or _now(), field="created_at")
         with write_scope(self.connection, commit=commit):
+            existing = self._item_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                if existing["creation_payload"] != creation_payload:
+                    raise ValueError("review item idempotency key was reused")
+                return existing, False
             self._validate_source(
                 course_id=course_id,
                 concept_id=concept_id,
                 source_type=source_type,
                 source_id=source_id,
             )
+            fsrs_card_id = self._next_fsrs_card_id()
+            initial_schedule = Schedule.from_record(
+                {
+                    "difficulty": difficulty,
+                    "stability": stability,
+                    "due_at": due_at,
+                    "last_reviewed_at": None,
+                    "repetitions": 0,
+                    "lapses": 0,
+                    "state": "new",
+                    "scheduler": "fsrs",
+                    "scheduler_version": scheduler_version,
+                    "scheduler_state": {"card_id": fsrs_card_id, "step": 0},
+                }
+            ).to_record()
             self.connection.execute(
                 """
                 INSERT INTO review_items (
@@ -130,18 +164,19 @@ class ReviewRepository:
             self.connection.execute(
                 """
                 INSERT INTO review_schedules (
-                    review_item_id, difficulty, stability, due_at,
+                    review_item_id, fsrs_card_id, difficulty, stability, due_at,
                     last_reviewed_at, repetitions, lapses, state, scheduler,
                     scheduler_version, scheduler_state_json, revision, updated_at
-                ) VALUES (?, ?, ?, ?, NULL, 0, 0, 'new', 'fsrs', ?, ?, 0, ?)
+                ) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 'new', 'fsrs', ?, ?, 0, ?)
                 """,
                 (
                     item_id,
-                    difficulty,
-                    stability,
-                    due_at,
-                    scheduler_version,
-                    _json(scheduler_state or {}),
+                    fsrs_card_id,
+                    initial_schedule["difficulty"],
+                    initial_schedule["stability"],
+                    initial_schedule["due_at"],
+                    initial_schedule["scheduler_version"],
+                    _json(initial_schedule["scheduler_state"]),
                     timestamp,
                 ),
             )
@@ -156,7 +191,8 @@ class ReviewRepository:
             SELECT i.*, s.difficulty, s.stability, s.due_at,
                    s.last_reviewed_at, s.repetitions, s.lapses, s.state,
                    s.scheduler, s.scheduler_version, s.scheduler_state_json,
-                   s.revision, s.updated_at AS schedule_updated_at
+                   s.fsrs_card_id, s.revision,
+                   s.updated_at AS schedule_updated_at
             FROM review_items i
             JOIN review_schedules s ON s.review_item_id = i.id
             WHERE i.id = ?
@@ -175,7 +211,8 @@ class ReviewRepository:
             SELECT i.*, s.difficulty, s.stability, s.due_at,
                    s.last_reviewed_at, s.repetitions, s.lapses, s.state,
                    s.scheduler, s.scheduler_version, s.scheduler_state_json,
-                   s.revision, s.updated_at AS schedule_updated_at
+                   s.fsrs_card_id, s.revision,
+                   s.updated_at AS schedule_updated_at
             FROM review_items i
             JOIN review_schedules s ON s.review_item_id = i.id
             WHERE i.status = 'active' AND s.due_at <= ?
@@ -206,33 +243,34 @@ class ReviewRepository:
         reviewed_at: str | None = None,
         commit: bool = True,
     ) -> tuple[dict[str, Any], bool]:
-        existing = self._attempt_by_idempotency_key(idempotency_key)
-        if existing is not None:
-            after = existing["schedule_after"]
-            expected = {
-                "id": attempt_id,
-                "review_item_id": item_id,
-                "rating": rating,
-                "response": response,
-            }
-            schedule_expected = {
-                "difficulty": difficulty,
-                "stability": stability,
-                "due_at": due_at,
-                "repetitions": repetitions,
-                "lapses": lapses,
-                "state": state,
-                "scheduler_version": scheduler_version,
-                "scheduler_state": scheduler_state,
-            }
-            if any(existing[key] != value for key, value in expected.items()) or any(
-                after[key] != value for key, value in schedule_expected.items()
-            ):
-                raise ValueError("review attempt idempotency key was reused")
-            return existing, False
-
-        timestamp = reviewed_at or _now()
+        timestamp = _utc_iso(reviewed_at or _now(), field="reviewed_at")
         with write_scope(self.connection, commit=commit):
+            existing = self._attempt_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                after = existing["schedule_after"]
+                expected = {
+                    "id": attempt_id,
+                    "review_item_id": item_id,
+                    "rating": rating,
+                    "response": response,
+                }
+                schedule_expected = {
+                    "difficulty": difficulty,
+                    "stability": stability,
+                    "due_at": due_at,
+                    "repetitions": repetitions,
+                    "lapses": lapses,
+                    "state": state,
+                    "scheduler_version": scheduler_version,
+                    "scheduler_state": scheduler_state,
+                }
+                if any(
+                    existing[key] != value for key, value in expected.items()
+                ) or any(
+                    after[key] != value for key, value in schedule_expected.items()
+                ):
+                    raise ValueError("review attempt idempotency key was reused")
+                return existing, False
             schedule = self.connection.execute(
                 "SELECT * FROM review_schedules WHERE review_item_id = ?",
                 (item_id,),
@@ -242,17 +280,43 @@ class ReviewRepository:
             if int(schedule["revision"]) != expected_revision:
                 raise ValueError("review schedule was updated concurrently")
             before = _schedule_snapshot(schedule)
+            current_schedule = Schedule.from_record(before)
+            next_schedule = Schedule.from_record(
+                {
+                    "difficulty": difficulty,
+                    "stability": stability,
+                    "due_at": due_at,
+                    "last_reviewed_at": timestamp,
+                    "repetitions": repetitions,
+                    "lapses": lapses,
+                    "state": state,
+                    "scheduler": "fsrs",
+                    "scheduler_version": scheduler_version,
+                    "scheduler_state": scheduler_state,
+                }
+            )
+            if next_schedule.scheduler_state["card_id"] != int(
+                schedule["fsrs_card_id"]
+            ):
+                raise ValueError("review schedule FSRS card id cannot change")
+            if (
+                current_schedule.last_reviewed_at is not None
+                and next_schedule.last_reviewed_at < current_schedule.last_reviewed_at
+            ):
+                raise ValueError("reviewed_at cannot precede the previous review")
+            normalized = next_schedule.to_record()
             after = {
-                "difficulty": difficulty,
-                "stability": stability,
-                "due_at": due_at,
+                "difficulty": normalized["difficulty"],
+                "stability": normalized["stability"],
+                "due_at": normalized["due_at"],
                 "last_reviewed_at": timestamp,
-                "repetitions": repetitions,
-                "lapses": lapses,
-                "state": state,
+                "repetitions": normalized["repetitions"],
+                "lapses": normalized["lapses"],
+                "state": normalized["state"],
                 "scheduler": "fsrs",
-                "scheduler_version": scheduler_version,
-                "scheduler_state": scheduler_state,
+                "scheduler_version": normalized["scheduler_version"],
+                "scheduler_state": normalized["scheduler_state"],
+                "fsrs_card_id": int(schedule["fsrs_card_id"]),
                 "revision": expected_revision + 1,
                 "updated_at": timestamp,
             }
@@ -286,15 +350,15 @@ class ReviewRepository:
                 WHERE review_item_id = ? AND revision = ?
                 """,
                 (
-                    difficulty,
-                    stability,
-                    due_at,
+                    normalized["difficulty"],
+                    normalized["stability"],
+                    normalized["due_at"],
                     timestamp,
-                    repetitions,
-                    lapses,
-                    state,
-                    scheduler_version,
-                    _json(scheduler_state),
+                    normalized["repetitions"],
+                    normalized["lapses"],
+                    normalized["state"],
+                    normalized["scheduler_version"],
+                    _json(normalized["scheduler_state"]),
                     timestamp,
                     item_id,
                     expected_revision,
@@ -328,6 +392,33 @@ class ReviewRepository:
             "SELECT * FROM review_attempts WHERE idempotency_key = ?", (key,)
         ).fetchone()
         return _decode_attempt(row) if row is not None else None
+
+    def _next_fsrs_card_id(self) -> int:
+        if not self.connection.in_transaction:
+            raise RuntimeError("FSRS card id allocation requires a write transaction")
+        row = self.connection.execute(
+            """
+            SELECT next_card_id
+            FROM review_fsrs_identity_sequence
+            WHERE singleton = 1
+            """
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("FSRS card id sequence is unavailable")
+        card_id = int(row["next_card_id"])
+        if card_id >= _MAX_SQLITE_INTEGER:
+            raise OverflowError("FSRS card id space is exhausted")
+        updated = self.connection.execute(
+            """
+            UPDATE review_fsrs_identity_sequence
+            SET next_card_id = next_card_id + 1
+            WHERE singleton = 1 AND next_card_id = ?
+            """,
+            (card_id,),
+        )
+        if updated.rowcount != 1:  # pragma: no cover - writer lock prevents this
+            raise RuntimeError("FSRS card id allocation raced unexpectedly")
+        return card_id
 
     def _validate_source(
         self,

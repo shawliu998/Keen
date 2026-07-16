@@ -170,6 +170,36 @@ The 2026-07-16 CPython 3.11/macOS arm64 runtime lock for this exact HTTPX wheel 
 
 `sniffio` is imported only as an optional compatibility path in this snapshot and was not selected or installed by the Python 3.11 resolver. Its separately inspected 1.3.1 wheel is dual MIT/Apache-2.0, but it is not a current shipped-component record. Re-audit it only if the final runtime lock or frozen artifact actually includes it.
 
+### py-fsrs 6.3.1
+
+- Use: deterministic FSRS review scheduling behind Keen's owned adapter; concept mastery is kept separate.
+- Artifact: `fsrs-6.3.1-py3-none-any.whl`.
+- SHA-256: `ac1bf9939573592d8c9bc1e11a00bd17e04146dc9f2c913127e2bcc431b9040b`.
+- Source: `https://github.com/open-spaced-repetition/py-fsrs`, tag `v6.3.1`, commit `3abe686e9c058d3f3c00bbeb92e68b71211b2b31`.
+- Evidence: the exact wheel and tag contain the same MIT license. The tag contains no NOTICE or COPYING file, and the inspected runtime Python files have no separate copyright or SPDX headers. The wheel declares Python >=3.10 and only `typing-extensions` as a runtime dependency; optimizer extras are not installed.
+
+MIT License
+
+Copyright (c) 2022 Open Spaced Repetition
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ### PyInstaller 6.21.0
 
 - Use: pinned build tool that creates the one-file learning-core executable embedded as Tauri `externalBin`.

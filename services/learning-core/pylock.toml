@@ -101,6 +101,17 @@ url = "https://files.pythonhosted.org/packages/9e/7c/8e3c6ad324ea5cb36604fc3f968
 sha256 = "cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189"
 
 [[packages]]
+name = "fsrs"
+version = "6.3.1"
+
+[[packages.wheels]]
+name = "fsrs-6.3.1-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/67/3c/e7e140f8cdb95b042cb125ee142e7630187e8e78d21847ca81e9d1e99bb8/fsrs-6.3.1-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "ac1bf9939573592d8c9bc1e11a00bd17e04146dc9f2c913127e2bcc431b9040b"
+
+[[packages]]
 name = "h11"
 version = "0.16.0"
 

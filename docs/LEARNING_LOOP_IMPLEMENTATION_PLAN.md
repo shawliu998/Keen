@@ -119,7 +119,7 @@ The model may interpret goals, choose registered tools, draft teaching text/ques
 
 ## New domain model and migration order
 
-Status for migrations `009`–`016`: **verified** for forward migration, constraints, repositories, and legacy-row preservation. This is persistence evidence only; it does not claim that the HTTP learning loop or UI exists. Responsibilities remain separate even if implementation discovers that a compatibility table or follow-up index is necessary.
+Status for migrations `009`–`017`: **verified** for forward migration, constraints, repositories, and legacy-row preservation. This is persistence evidence only; it does not claim that the HTTP learning loop or UI exists. Responsibilities remain separate even if implementation discovers that a compatibility table or follow-up index is necessary.
 
 | Migration | New or extended entities | Compatibility and invariants |
 | --- | --- | --- |
@@ -131,6 +131,7 @@ Status for migrations `009`–`016`: **verified** for forward migration, constra
 | `014_misconceptions.sql` | `misconceptions`, `misconception_evidence` | Status checks, evidence counts, course/concept scope, no single error auto-confirms a long-term misconception |
 | `015_review_items.sql` | `review_items`, `review_attempts`, `review_schedules` | FSRS state is separate from concept mastery; idempotent schedule writes; UTC timestamps and scheduler version |
 | `016_study_plans.sql` | additive `study_tasks` source/priority/rationale/schedule/completion/feedback fields and `study_task_feedback` (the filename follows the requested migration sequence; its bounded responsibility is Feed/task planning state) | Preserve existing tasks/statuses with compatible backfill; store explainable priority components and source identity; no calendar write |
+| `017_review_fsrs_identity.sql` | additive stable identity and validated adapter state for `review_schedules` | Preserve applied 015 data; backfill a unique positive `fsrs_card_id`; make pristine new rows restartable under the pinned Keen v1 scheduler; enforce identity/state agreement without rewriting migration 015 |
 
 Every JSON text column must pass Pydantic/Zod validation at the boundary and `json_valid` where SQLite supports the invariant. Use foreign keys, status checks, indexes for recovery and due queries, transactionally consistent writes, and explicit `created_at`/`updated_at`. Migration tests must cover empty database, `001` legacy database, current `008` database with user rows, repeated startup, constraint failure and interrupted upgrade. No destructive reset is an accepted recovery action.
 
@@ -162,7 +163,9 @@ Level 3 infrastructure may exist, but calendar, cloud, email and LMS tools remai
 
 ## Deep Learn state machine
 
-Status: **not started**.
+Status: **verified** for the provider-free transition primitive; session API,
+repository orchestration, generated teaching content, and restart E2E remain
+`not started`.
 
 Canonical flow:
 
@@ -186,7 +189,9 @@ Session input persists goal, course, controlled document scope, estimated durati
 
 ## Assessment, hints and grading
 
-Status: **not started**.
+Status: **verified** for provider-free objective grading, bounded rubric
+normalization, final subjective scoring, and versioned hint penalties. Durable
+assessment orchestration and HTTP/UI flows remain `not started`.
 
 Supported item types: `single_choice`, `multiple_choice`, `true_false`, `fill_blank`, `short_answer`, and `step_by_step`. Generated drafts are rejected or regenerated unless they have a valid concept, current source chunks/pages, legal type/options/answer, complete rubric, bounded difficulty/max score and no obvious answer leakage. Source text is data, not generation policy.
 
@@ -203,7 +208,10 @@ Hints have four durable levels: direction, key concept, partial steps and near-c
 
 ## Mastery and misconception rules
 
-Status: **in progress** for basic BKT; evidence-aware behavior is **not started**.
+Status: **verified** for deterministic evidence weighting, weighted BKT input,
+misconception merge/threshold/lifecycle rules, and algorithm/version validation.
+Transactional assessment-to-evidence orchestration and learner UI remain
+`not started`.
 
 The first version adapts the existing BKT update but adds deterministic evidence weight from correctness, independence, hint level, difficulty, confidence calibration and response type. Central configuration—not prompts or scattered constants—defines weights. Initial target ordering is independent/high-difficulty > independent/ordinary > one hint > multiple hints > partial result > content read; a self-reported “I understand” has zero mastery weight.
 
@@ -219,27 +227,35 @@ The model may propose a misconception label/description. Deterministic rules mer
 
 ## FSRS review integration
 
-Status: **not started**.
+Status: **verified** for the pinned adapter, migration 017, repository round
+trip, deterministic ratings, UTC/state/version validation, and stable card
+identity. Flashcards UI and assessment-to-review orchestration remain
+`not started`.
 
 Do not invent a scheduler. Integrate a mature, license-compatible Python FSRS implementation behind:
 
 ```python
 class ReviewScheduler(Protocol):
-    def schedule(
-        self,
-        state: ReviewState,
-        rating: ReviewRating,
-        reviewed_at: datetime,
-    ) -> ReviewSchedule: ...
+    def new_schedule(self, *, card_id: int, now: datetime) -> Schedule: ...
+
+    def review(
+        self, *, current: Schedule, rating: Rating, reviewed_at: datetime
+    ) -> Schedule: ...
 ```
 
 Ratings are `again`, `hard`, `good`, and `easy`. Review items may come from a Deep Learn unit, wrong answer, confirmed misconception, user flashcard or editable Agent-generated flashcard. Persist difficulty, stability, state, due time, repetitions, lapses, last review, scheduler name/version and the originating evidence. Tests freeze UTC time and disable any fuzzing so expected schedules are reproducible.
 
-Before introducing a package or upstream code, verify its exact revision/artifact, `LICENSE`, `NOTICE` and relevant headers; choose an adapter/dependency over copying; then update the open-source inventory, upstream patches where applicable, third-party notices, locks/hashes and scanners. This Gate 0 plan introduces no dependency and therefore changes none of those records.
+The selected dependency is py-fsrs 6.3.1, exact wheel SHA-256
+`ac1bf9939573592d8c9bc1e11a00bd17e04146dc9f2c913127e2bcc431b9040b`,
+tag commit `3abe686e9c058d3f3c00bbeb92e68b71211b2b31`, MIT. It is pinned in
+the runtime lock and isolated behind Keen's adapter; provenance, notices, and
+packaging evidence are recorded in the repository inventory documents.
 
 ## Learning Feed
 
-Status: **in progress** for read-only task display; generation and mutation are **not started**.
+Status: **verified** for the deterministic, versioned priority calculation and
+component/rationale output; live candidate generation, Feed actions, API and
+UI mutation remain `not started`.
 
 Real candidate sources are due FSRS reviews, deadline urgency, weak mastery, forgetting risk, prerequisite importance, unfinished/recoverable session, confirmed misconception and manual task. A deterministic planner computes:
 
@@ -305,7 +321,7 @@ Status: **in progress**.
 
 Status: **verified** on 2026-07-16 for schema and repository scope.
 
-- Apply migrations `009`–`016`; add typed repositories and transaction helpers.
+- Apply migrations `009`–`017`; add typed repositories and transaction helpers.
 - Test empty/legacy/current databases, existing-row preservation, JSON/status constraints, rollbacks, uniqueness, idempotency and recovery queries.
 - Exit: forward migrations and repository tests pass without data deletion.
 
@@ -313,10 +329,22 @@ Evidence: the Gate 1 migration/repository subset passed 46/46 tests after indepe
 
 ### Gate 2 — deterministic engine
 
-Status: **not started**.
+Status: **verified** on 2026-07-16 for the provider-free algorithm and scheduler
+scope.
 
 - Test legal/illegal session transitions, objective grading, rubric bounds, hint penalties, evidence-weighted BKT, misconception thresholds, FSRS fixtures and Feed priority.
 - Exit: all core algorithms pass with no LLM/provider.
+
+Evidence: the current deterministic-engine focus passed 156/156 tests for the
+study transition machine, objective/subjective grading, hint penalties,
+evidence-weighted mastery, misconception rules, Feed priority, FSRS adapter and
+Review repository. The FSRS/repository/migration/vector subset passed 43/43.
+The stable full Python suite passed 500/500 with one existing Starlette
+deprecation warning; Ruff lint and format checks passed all 97 learning-core
+Python files, and `git diff --check` passed. Independent FSRS/provenance review
+found no remaining P0/P1. This evidence does not claim Agent orchestration,
+HTTP resources, frontend learning flows, or the vertical assessment-to-review
+transaction.
 
 ### Gate 3 — Agent orchestrator
 
@@ -366,9 +394,11 @@ Performance acceptance includes usable session lists at 1,000 rows, paged/virtua
 
 ## Packaging impact
 
-Status: **not started** until a scheduler or other dependency is introduced.
+Status: **in progress**. The pinned FSRS dependency passed isolated lock,
+license, import and PyInstaller one-file checks; the latest adapter/migration
+still requires the final Gate 7 `.app`/`.dmg` rebuild and mounted smoke.
 
-Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`016` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
+Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`017` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
 
 ## Risks and mitigations
 
