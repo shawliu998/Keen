@@ -39,6 +39,10 @@ def test_openai_compatible_stream_protocol_and_request_shape() -> None:
         chunks = [
             {"model": "local-chat", "choices": [{"delta": {"content": "Hi "}}]},
             {"model": "local-chat", "choices": [{"delta": {"content": "there"}}]},
+            {
+                "model": "local-chat",
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+            },
         ]
         content = (
             "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
@@ -86,6 +90,7 @@ def test_ollama_stream_protocol_and_request_shape() -> None:
                     "model": "llama-local",
                     "message": {"role": "assistant", "content": "answer"},
                     "done": True,
+                    "done_reason": "stop",
                 },
             )
         )
@@ -195,6 +200,79 @@ def test_chat_providers_reject_truncated_streams_without_completion_markers() ->
         )
         for provider in providers:
             with pytest.raises(LocalProviderResponseError, match="completion marker"):
+                await _collect(provider)
+
+    asyncio.run(exercise())
+
+
+def test_chat_providers_reject_non_normal_or_missing_stop_reasons() -> None:
+    responses = iter(
+        (
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=(
+                    'data: {"model":"local-chat","choices":[{"delta":{},'
+                    '"finish_reason":"length"}]}\n\n'
+                    "data: [DONE]\n\n"
+                ),
+            ),
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content="data: [DONE]\n\n",
+            ),
+            httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=(
+                    '{"model":"local-chat","message":{"content":"partial"},'
+                    '"done":true,"done_reason":"length"}\n'
+                ),
+            ),
+            httpx.Response(
+                200,
+                headers={"content-type": "application/x-ndjson"},
+                content=(
+                    '{"model":"local-chat","message":{"content":"answer"},'
+                    '"done":true}\n'
+                ),
+            ),
+        )
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return next(responses)
+
+    async def exercise() -> None:
+        providers = (
+            OpenAICompatibleChatProvider(
+                base_url="http://127.0.0.1:8080",
+                model="local-chat",
+                version="v1",
+                transport=httpx.MockTransport(handler),
+            ),
+            OpenAICompatibleChatProvider(
+                base_url="http://127.0.0.1:8080",
+                model="local-chat",
+                version="v1",
+                transport=httpx.MockTransport(handler),
+            ),
+            OllamaChatProvider(
+                base_url="http://127.0.0.1:11434",
+                model="local-chat",
+                version="v1",
+                transport=httpx.MockTransport(handler),
+            ),
+            OllamaChatProvider(
+                base_url="http://127.0.0.1:11434",
+                model="local-chat",
+                version="v1",
+                transport=httpx.MockTransport(handler),
+            ),
+        )
+        for provider in providers:
+            with pytest.raises(LocalProviderResponseError, match="stop reason"):
                 await _collect(provider)
 
     asyncio.run(exercise())

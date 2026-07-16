@@ -9,7 +9,11 @@ from typing import Protocol
 from ..agent.event_stream import AgentEventStore, DurableAgentEvent, DurableEventStream
 from ..agent.executor import AgentStepExecutor
 from ..agent.orchestrator import AgentOrchestrator
-from ..agent.provider import AgentProvider, close_provider_safely
+from ..agent.provider import (
+    AgentProvider,
+    FixedAutomationProvider,
+    close_provider_safely,
+)
 from ..agent.registry import ToolRegistry
 from ..agent.sqlite_audit import SQLiteAuditSink
 from ..agent.tools.product import register_initial_product_tools
@@ -300,6 +304,15 @@ class AgentRuntimeManager:
                     event_store=self._event_store,
                     provider=provider,
                     executor=executor,
+                    # The fixed provider is an in-process test fixture and may
+                    # exercise the complete registry. No configured production
+                    # provider receives tools until it declares a separately
+                    # reviewed, run-scoped allowlist.
+                    allowed_tool_names=(
+                        frozenset(registry)
+                        if isinstance(provider, FixedAutomationProvider)
+                        else frozenset()
+                    ),
                 )
                 async with self._lock:
                     if self._active_run_id == run_id:

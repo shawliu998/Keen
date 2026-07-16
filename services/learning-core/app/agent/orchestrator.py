@@ -72,10 +72,12 @@ class AgentOrchestrator:
         event_store: AgentEventStore,
         provider: AgentProvider,
         executor: StepExecutor,
+        allowed_tool_names: frozenset[str] | None = None,
     ) -> None:
         self._event_store = event_store
         self._provider = provider
         self._executor = executor
+        self._allowed_tool_names = allowed_tool_names
         self._active: dict[str, asyncio.Event] = {}
         self._active_lock = asyncio.Lock()
 
@@ -239,6 +241,13 @@ class AgentOrchestrator:
             )
             return None
         if isinstance(action, ToolCall):
+            if (
+                self._allowed_tool_names is not None
+                and action.tool_name not in self._allowed_tool_names
+            ):
+                raise ProviderProtocolError(
+                    "provider requested a tool outside its runtime allowlist"
+                )
             submit_tool_result = getattr(self._provider, "submit_tool_result", None)
             if not callable(submit_tool_result):
                 raise ProviderProtocolError(

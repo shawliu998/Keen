@@ -200,6 +200,7 @@ class OpenAICompatibleChatProvider(_LocalChatProvider):
         values = _validate_messages(messages)
         response: httpx.Response | None = None
         completed = False
+        finish_reason: str | None = None
         try:
             async with asyncio.timeout(self._total_timeout):
                 response = await self._open_response(
@@ -224,6 +225,10 @@ class OpenAICompatibleChatProvider(_LocalChatProvider):
                         continue
                     data = line.removeprefix("data:").strip()
                     if data == "[DONE]":
+                        if finish_reason != "stop":
+                            raise LocalProviderResponseError(
+                                "local chat provider ended without a normal stop reason"
+                            )
                         completed = True
                         return
                     payload = _parse_object(data)
@@ -238,6 +243,13 @@ class OpenAICompatibleChatProvider(_LocalChatProvider):
                         raise LocalProviderResponseError(
                             "local chat provider returned an invalid choice"
                         )
+                    reason = choice.get("finish_reason")
+                    if reason is not None:
+                        if reason != "stop" or finish_reason is not None:
+                            raise LocalProviderResponseError(
+                                "local chat provider returned a non-normal stop reason"
+                            )
+                        finish_reason = reason
                     delta = choice.get("delta")
                     if not isinstance(delta, dict):
                         raise LocalProviderResponseError(
@@ -332,6 +344,10 @@ class OllamaChatProvider(_LocalChatProvider):
                     if content:
                         yield content
                     if payload.get("done") is True:
+                        if payload.get("done_reason") != "stop":
+                            raise LocalProviderResponseError(
+                                "local chat provider returned a non-normal stop reason"
+                            )
                         completed = True
                         return
                 if not completed:

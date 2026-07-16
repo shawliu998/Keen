@@ -480,16 +480,11 @@ def test_single_active_claim_idempotent_replay_cancel_and_no_orphan(tmp_path):
         assert "done" not in event_types
 
 
-class _ReleasedActionsProvider:
-    name = "test-provider"
-    model = "released-actions"
-    version = "v1"
-
+class _ReleasedActionsProvider(FixedAutomationProvider):
     def __init__(self, actions: list[ProviderAction]) -> None:
+        super().__init__(actions)
         self.release = threading.Event()
         self.actions = actions
-        self.closed = False
-        self.tool_results: list[ProviderToolResult] = []
 
     async def stream(self, request: ProviderRequest) -> AsyncIterator[ProviderAction]:
         del request
@@ -497,11 +492,66 @@ class _ReleasedActionsProvider:
         for action in self.actions:
             yield action
 
+
+class _UndeclaredToolProvider:
+    name = "undeclared-tools"
+    model = "unsafe-tool-attempt"
+    version = "v1"
+
+    def __init__(self) -> None:
+        self.feedback: list[ProviderToolResult] = []
+        self.closed = False
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator[ProviderAction]:
+        del request
+        yield ToolCall(
+            call_id="unapproved-complete",
+            tool_name="complete_study_task",
+            arguments={
+                "task_id": "task-chain-rule",
+                "course_id": "course-calculus",
+                "expected_revision": 0,
+                "completed_at": "2026-07-16T10:00:00Z",
+            },
+        )
+        yield ProviderFinished()
+
     async def submit_tool_result(self, result: ProviderToolResult) -> None:
-        self.tool_results.append(result)
+        self.feedback.append(result)
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+def test_runtime_denies_tools_for_provider_without_reviewed_allowlist(tmp_path):
+    settings = _settings(tmp_path, seed_demo=True)
+    provider = _UndeclaredToolProvider()
+
+    with TestClient(
+        create_app(settings, agent_provider_factory=lambda: provider)
+    ) as client:
+        created = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        terminal = _wait_for_terminal(client, run_id)
+        assert terminal["status"] == "failed"
+        assert terminal["errorCode"] == "provider_protocol_error"
+        events = _sse_events(
+            client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH).text
+        )
+        assert not any(event["event"] == "tool_start" for event in events)
+
+    with Database(settings.database_path).connection() as connection:
+        task = connection.execute(
+            "SELECT status, revision FROM study_tasks WHERE id = 'task-chain-rule'"
+        ).fetchone()
+        invocation_count = connection.execute(
+            "SELECT count(*) FROM tool_invocations WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+    assert tuple(task) == ("upcoming", 0)
+    assert invocation_count == 0
+    assert provider.feedback == []
+    assert provider.closed is True
 
 
 def test_level_two_tool_starts_after_post_and_uses_background_owned_connection(

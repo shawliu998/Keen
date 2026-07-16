@@ -510,6 +510,20 @@ tools, and production model-selected tools require run-derived scope and an
 explicit data-sharing policy, so this is protocol evidence rather than a claim
 of a complete tool-capable learning Agent.
 
+The provider-hardening follow-up makes the application runtime's production
+tool allowlist empty by default. Merely implementing private feedback no longer
+grants access to the registered L1/L2/L3 tools: an undeclared provider is
+rejected before `tool_start`, audit reservation or mutation. Only the exact
+in-process automation fixture retains full-registry access for deterministic
+tests. OpenAI-compatible text completion now requires a single normal
+`finish_reason=stop` before `[DONE]`, and Ollama requires
+`done_reason=stop`; missing, duplicate, length-limited or other abnormal stop
+reasons fail without `done`. Focused tests passed 30/30 and the full Python
+suite passed 623/623 with one existing Starlette warning; Ruff lint and format
+passed all 122 files. The next production tool slice must make provider catalog,
+orchestrator allowlist and read-only executor registry identical, inject trusted
+course/time scope, and keep Level 2/3 absent.
+
 ### Gate 4 — durable Conversation and Deep Learn
 
 Status: **not started**.

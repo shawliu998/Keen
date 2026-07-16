@@ -72,6 +72,11 @@ written to `artifacts/visual-diff/current/home.png`; the report remains
 `missing_reference`, so no diff percentage exists. The Home / Agent visual row
 therefore remains Missing rather than passed, and no pixel-parity claim is made.
 
+2026-07-16 Agent provider-hardening note: the production-default empty tool
+allowlist and strict local-chat stop-reason validation are backend-only changes;
+they add no rendered state or new visual evidence. The Home / Agent reference,
+failure-state captures and parity comparison therefore remain Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:
