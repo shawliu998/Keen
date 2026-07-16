@@ -95,7 +95,7 @@ function mutationFromEvent(event: Extract<AgentRunEvent, { type: "state_mutation
   return {
     mutationId: event.data.mutationId,
     invocationId: event.data.invocationId,
-    replayed: false,
+    replayed: "replayed" in event.data ? event.data.replayed : false,
     entityType: event.data.entityType,
     entityId: event.data.entityId,
     operation: event.data.operation,

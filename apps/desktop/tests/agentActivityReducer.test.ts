@@ -139,14 +139,14 @@ describe("Agent activity reducer", () => {
         reversible: true,
         action: "undo",
         targetMutationId: "mutation-original-1",
-        replayed: false,
+        replayed: true,
       },
     }]);
 
     expect(state.mutations).toEqual([{
       mutationId: "mutation-inverse-1",
       invocationId: "invocation-undo-1",
-      replayed: false,
+      replayed: true,
       entityType: "study_task",
       entityId: "task-1",
       operation: "update",
