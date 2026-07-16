@@ -1,12 +1,44 @@
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLearningCoreClient, type DemoState, type LearningCoreClient } from "@keen/api-client";
-import { discoverSidecar, isDesktopRuntime } from "./sidecarRuntime";
+import { discoverSidecar, isDesktopRuntime, restartSidecar } from "./sidecarRuntime";
 
-export type LearningCoreStatus = "demo" | "starting" | "healthy" | "unavailable" | "error";
+export type LearningCoreStatus =
+  | "demo"
+  | "starting"
+  | "binding"
+  | "migrating"
+  | "recovering"
+  | "starting_server"
+  | "health_checking"
+  | "restarting"
+  | "healthy"
+  | "unavailable"
+  | "configuration_error"
+  | "error";
+
+export type LearningCoreErrorKind = "connection" | "health";
+
+type RetryFailure = {
+  message: string;
+  connectionUpdatedAt: number;
+};
+
+export function isLearningCoreStarting(status: LearningCoreStatus): boolean {
+  return status === "starting"
+    || status === "binding"
+    || status === "migrating"
+    || status === "recovering"
+    || status === "starting_server"
+    || status === "health_checking"
+    || status === "restarting";
+}
 
 type LearningCoreContextValue = {
   status: LearningCoreStatus;
+  errorKind: LearningCoreErrorKind | null;
+  serviceMessage: string | null;
+  retryError: string | null;
   client: LearningCoreClient | null;
   connectionGeneration: number;
   demoState: DemoState | undefined;
@@ -18,6 +50,8 @@ type LearningCoreContextValue = {
 const LearningCoreContext = createContext<LearningCoreContextValue | null>(null);
 const SIDECAR_DISCOVERY_INTERVAL_MS = 2_000;
 const SIDECAR_HEALTH_INTERVAL_MS = 5_000;
+const MAX_SERVICE_MESSAGE_LENGTH = 500;
+const RETRY_FAILURE_MESSAGE = "Keen could not confirm the requested learning-core recovery. No replacement service was assumed to be running. The supervised status was refreshed; retry after resolving the current error.";
 let nextConnectionGeneration = 0;
 
 function toError(error: unknown): Error | null {
@@ -25,8 +59,22 @@ function toError(error: unknown): Error | null {
   return error instanceof Error ? error : new Error("Unknown learning-core error");
 }
 
+function toSafeServiceMessage(message: string | null | undefined): string | null {
+  if (!message) return null;
+  const normalized = Array.from(message, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 32 || codePoint === 127 ? " " : character;
+  })
+    .join("")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return normalized ? normalized.slice(0, MAX_SERVICE_MESSAGE_LENGTH) : null;
+}
+
 export function LearningCoreProvider({ children }: { children: ReactNode }) {
   const desktop = isDesktopRuntime();
+  const retryInFlight = useRef<Promise<void> | null>(null);
+  const [retryFailure, setRetryFailure] = useState<RetryFailure | null>(null);
   const connectionQuery = useQuery({
     queryKey: ["learning-core", "connection"],
     queryFn: ({ signal }) => discoverSidecar(signal),
@@ -66,21 +114,26 @@ export function LearningCoreProvider({ children }: { children: ReactNode }) {
     refetchInterval: desktop ? SIDECAR_HEALTH_INTERVAL_MS : false,
   });
 
-  const status: LearningCoreStatus = !desktop
-    ? "demo"
-    : connectionQuery.isError
-      ? "error"
-      : connectionQuery.isPending
-        ? "starting"
-        : connectionQuery.data.status === "starting" || connectionQuery.data.status === "restarting"
-          ? "starting"
-        : !connectionQuery.data.available
-          ? "unavailable"
-          : healthQuery.isError
-            ? "error"
-            : healthQuery.isSuccess
-              ? "healthy"
-              : "starting";
+  const status: LearningCoreStatus = (() => {
+    if (!desktop) return "demo";
+    if (connectionQuery.isError) return "error";
+    if (connectionQuery.isPending) return "starting";
+    const connection = connectionQuery.data;
+    if (connection.status === "configuration_error") return "configuration_error";
+    if (connection.status === "restarting") return "restarting";
+    if (connection.status === "starting") return connection.phase ?? "starting";
+    if (connection.status === "stopped" || connection.status === "unavailable" || !connection.available) return "unavailable";
+    if (healthQuery.isError) return "error";
+    if (healthQuery.isSuccess) return "healthy";
+    return "health_checking";
+  })();
+  const errorKind: LearningCoreErrorKind | null = connectionQuery.isError
+    ? "connection"
+    : connectionQuery.data?.status === "ready" && healthQuery.isError ? "health" : null;
+  const serviceMessage = toSafeServiceMessage(connectionQuery.data?.message);
+  const retryError = retryFailure?.connectionUpdatedAt === connectionQuery.dataUpdatedAt
+    ? retryFailure.message
+    : null;
 
   const demoStateQuery = useQuery({
     queryKey: ["learning-core", "demo-state", port, connectionGeneration],
@@ -95,27 +148,68 @@ export function LearningCoreProvider({ children }: { children: ReactNode }) {
   });
 
   const retry = useCallback(async () => {
-    if (!desktop || connectionQuery.isFetching || healthQuery.isFetching || demoStateQuery.isFetching) return;
-    if (!connectionQuery.data?.available) {
-      await connectionQuery.refetch();
-      return;
-    }
-    if (!healthQuery.isSuccess) {
-      await healthQuery.refetch();
-      return;
-    }
-    await demoStateQuery.refetch();
+    if (!desktop) return;
+    if (retryInFlight.current) return retryInFlight.current;
+
+    const operation = (async () => {
+      setRetryFailure(null);
+      try {
+        const connectionStatus = connectionQuery.data?.status;
+        if (connectionQuery.isError || connectionStatus === "starting" || connectionStatus === "restarting") {
+          await connectionQuery.refetch();
+          return;
+        }
+        if (connectionStatus === "configuration_error") {
+          await restartSidecar("configuration_recovered");
+          await connectionQuery.refetch();
+          return;
+        }
+        if (connectionStatus === "unavailable" || connectionStatus === "stopped") {
+          await restartSidecar("sidecar_unavailable");
+          await connectionQuery.refetch();
+          return;
+        }
+        if (connectionStatus === "ready" && !healthQuery.isSuccess) {
+          await healthQuery.refetch();
+          return;
+        }
+        if (connectionStatus === "ready") {
+          await demoStateQuery.refetch();
+          return;
+        }
+        await connectionQuery.refetch();
+      } catch {
+        let connectionUpdatedAt = connectionQuery.dataUpdatedAt;
+        try {
+          const refreshed = await connectionQuery.refetch();
+          connectionUpdatedAt = refreshed.dataUpdatedAt;
+        } catch {
+          // Keep the recovery error bounded and resolved even if rediscovery transport also fails.
+        }
+        setRetryFailure({
+          message: RETRY_FAILURE_MESSAGE,
+          connectionUpdatedAt,
+        });
+      }
+    })().finally(() => {
+      retryInFlight.current = null;
+    });
+    retryInFlight.current = operation;
+    return operation;
   }, [connectionQuery, demoStateQuery, desktop, healthQuery]);
 
   const value = useMemo<LearningCoreContextValue>(() => ({
     status,
+    errorKind,
+    serviceMessage,
+    retryError,
     client,
     connectionGeneration,
     demoState: demoStateQuery.data,
     demoStatePending: status === "healthy" && demoStateQuery.isPending,
     demoStateError: toError(demoStateQuery.error),
     retry,
-  }), [client, connectionGeneration, demoStateQuery.data, demoStateQuery.error, demoStateQuery.isPending, retry, status]);
+  }), [client, connectionGeneration, demoStateQuery.data, demoStateQuery.error, demoStateQuery.isPending, errorKind, retry, retryError, serviceMessage, status]);
 
   return <LearningCoreContext.Provider value={value}>{children}</LearningCoreContext.Provider>;
 }

@@ -78,7 +78,15 @@ class MasteryUpdate(ApiModel):
 
 class AnswerRequest(ApiModel):
     question: str = Field(min_length=1, max_length=8_000)
-    course_id: str | None = None
+    course_id: str | None = Field(default=None, alias="courseId")
+    conversation_id: str | None = Field(
+        default=None,
+        alias="conversationId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    retrieval_limit: int = Field(default=8, alias="retrievalLimit", ge=6, le=10)
 
 
 class DemoState(ApiModel):
@@ -102,29 +110,108 @@ class DocumentRecord(ApiModel):
     parser: str
     created_at: datetime = Field(alias="createdAt")
     error: str | None
+    course_ids: list[str] = Field(alias="courseIds")
     course_id: str | None = Field(default=None, exclude=True)
-
-
-class DocumentImportResponse(ApiModel):
-    document: DocumentRecord
-    duplicate: bool
+    index_state: (
+        Literal["pending", "indexed-lexical", "indexed-hybrid", "needs-reindex"] | None
+    ) = Field(default=None, alias="indexState")
+    embedding_status: (
+        Literal[
+            "not-applicable",
+            "provider-missing",
+            "pending",
+            "embedding",
+            "ready",
+            "provider-failure",
+            "needs-reindex",
+        ]
+        | None
+    ) = Field(default=None, alias="embeddingStatus")
+    embedding_model: str | None = Field(default=None, alias="embeddingModel")
+    embedding_error: str | None = Field(default=None, alias="embeddingError")
+    retrieval_warning: str | None = Field(default=None, alias="retrievalWarning")
+    provider_configured: bool | None = Field(default=None, alias="providerConfigured")
 
 
 class DocumentListResponse(ApiModel):
     documents: list[DocumentRecord]
 
 
+IndexJobStatus = Literal[
+    "queued",
+    "running",
+    "cancel_requested",
+    "cancelled",
+    "completed",
+    "failed",
+    "interrupted",
+]
+IndexJobStage = Literal[
+    "queued",
+    "validating",
+    "stored",
+    "parsing",
+    "chunking",
+    "lexical_indexing",
+    "embedding",
+    "finalizing",
+]
+
+
+class DocumentIndexJob(ApiModel):
+    id: str
+    document_id: str = Field(alias="documentId")
+    status: IndexJobStatus
+    stage: IndexJobStage
+    progress: int = Field(ge=0, le=100)
+    cancel_requested: bool = Field(alias="cancelRequested")
+    error: str | None
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")
+    started_at: datetime | None = Field(alias="startedAt")
+    finished_at: datetime | None = Field(alias="finishedAt")
+    operation: Literal["full_index", "embedding_reindex"]
+
+
+class DocumentIndexJobListResponse(ApiModel):
+    jobs: list[DocumentIndexJob]
+
+
+class DocumentRetryResponse(ApiModel):
+    document: DocumentRecord
+    job: DocumentIndexJob
+
+
+class DocumentEmbeddingReindexResponse(ApiModel):
+    document: DocumentRecord
+    job: DocumentIndexJob
+
+
+class DocumentCourseLinkResponse(ApiModel):
+    document: DocumentRecord
+    linked: bool
+
+
+class DocumentImportResponse(ApiModel):
+    document: DocumentRecord
+    job: DocumentIndexJob
+    duplicate: bool
+    linked: bool
+
+
 class SearchRequest(ApiModel):
     query: str = Field(min_length=1, max_length=2_000)
     course_id: str | None = Field(default=None, alias="courseId")
-    limit: int = Field(default=8, ge=1, le=50)
+    limit: int = Field(default=8, ge=1, le=10)
 
 
 class SearchResult(ApiModel):
     chunk_id: str = Field(alias="chunkId")
+    chunk_ids: list[str] = Field(alias="chunkIds")
     document_id: str = Field(alias="documentId")
     document_name: str = Field(alias="documentName")
     page_number: int = Field(alias="pageNumber", ge=1)
+    page_end: int = Field(alias="pageEnd", ge=1)
     section_path: list[str] = Field(alias="sectionPath")
     text: str
     score: float = Field(ge=0)
@@ -132,6 +219,8 @@ class SearchResult(ApiModel):
 
 class SearchResponse(ApiModel):
     query: str
+    mode: Literal["hybrid", "lexical_only"]
+    warning: str | None
     results: list[SearchResult]
 
 

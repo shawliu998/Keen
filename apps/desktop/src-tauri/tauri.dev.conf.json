@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Keen Dev",
+  "identifier": "com.keen.learning.dev",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Keen Dev",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1180,
+        "minHeight": 740,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 18
+        }
+      }
+    ]
+  }
+}

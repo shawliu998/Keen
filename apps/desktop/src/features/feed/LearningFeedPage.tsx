@@ -6,7 +6,7 @@ import {
 import { Badge, Button, Card, EmptyState, Progress } from "@keen/ui";
 import type { LearningTask, TaskStatus } from "@keen/domain";
 import { Page, Segmented } from "../../components/Page";
-import { useLearningCore, type LearningCoreStatus } from "../../services/LearningCoreProvider";
+import { isLearningCoreStarting, useLearningCore, type LearningCoreErrorKind, type LearningCoreStatus } from "../../services/LearningCoreProvider";
 import { useAppStore } from "../../state/appStore";
 import { mapDemoStateTasks } from "./liveTasks";
 
@@ -14,18 +14,49 @@ const labels: Record<TaskStatus, string> = {
   today: "Today", upcoming: "Upcoming", overdue: "Overdue", completed: "Completed",
 };
 
-function FeedServiceState({ status, onRetry }: { status: LearningCoreStatus; onRetry: () => void }) {
-  const starting = status === "starting";
+function FeedServiceState({ status, errorKind = null, serviceMessage, retryError, onRetry }: {
+  status: LearningCoreStatus;
+  errorKind?: LearningCoreErrorKind | null;
+  serviceMessage?: string | null;
+  retryError?: string | null;
+  onRetry: () => void;
+}) {
+  const starting = isLearningCoreStarting(status);
+  const titles: Partial<Record<LearningCoreStatus, string>> = {
+    starting: "Learning core is starting",
+    binding: "Learning core is binding its local port",
+    migrating: "Learning core is migrating local data",
+    recovering: "Learning core is recovering interrupted work",
+    starting_server: "Learning core server is starting",
+    health_checking: "Learning core is checking authenticated health",
+    restarting: "Learning core is restarting",
+    unavailable: "Learning core is unavailable",
+    configuration_error: "Learning core has a configuration error",
+  };
+  const title = titles[status] ?? (errorKind === "health" ? "Learning core health check failed" : "Learning core connection status failed");
+  const action = status === "unavailable"
+    ? "Restart learning core"
+    : status === "configuration_error"
+      ? "Retry learning core"
+      : status === "error" && errorKind !== "health" ? "Retry connection status" : "Retry health check";
+  const fallback = starting
+    ? "Keen is completing local startup and authenticated health checks. Live tasks and mastery will appear when it is ready; no demo records are being substituted."
+    : status === "configuration_error"
+      ? "The local learning service could not start. Live data is unavailable and stored learning records were not replaced. Follow the recovery guidance, then retry the learning core."
+      : status === "unavailable"
+        ? "The supervised local service is unavailable. Live data is unavailable and stored learning records were not replaced. Retry to request a new authenticated sidecar generation."
+        : errorKind === "connection"
+          ? "Keen could not read the supervised service status, so it did not assume that restarting was safe. Live data is unavailable and stored learning records were not replaced. Retry the status check."
+          : "The ready local service failed an authenticated request. Live data is unavailable and stored learning records were not replaced. Retry the health check; restart Keen if the failure continues.";
   return (
     <Card className="service-state" role={starting ? "status" : "alert"}>
       {starting ? <LoaderCircle className="spin" size={23} /> : <ServerOff size={23} />}
       <div>
-        <strong>{starting ? "Learning core is starting" : status === "unavailable" ? "Learning core is unavailable" : "Learning core connection failed"}</strong>
-        <p>{starting
-          ? "Keen is completing an authenticated local health check. Live tasks and mastery will appear when it succeeds; no demo records are being substituted."
-          : "Live tasks and mastery could not be loaded. Your stored data was not changed, and Keen did not substitute demo records. Retrying is safe; restart Keen if the problem continues."}</p>
+        <strong>{title}</strong>
+        <p>{serviceMessage ?? fallback}</p>
+        {retryError && <p className="service-retry-error" role="alert">{retryError}</p>}
       </div>
-      {!starting && <Button onClick={onRetry}>Retry connection</Button>}
+      {!starting && <Button onClick={onRetry}>{action}</Button>}
     </Card>
   );
 }
@@ -90,8 +121,8 @@ export function LearningFeedPage() {
   return (
     <Page title="Learning Feed" description="Live local task/mastery readout when connected. Planning and task mutation are not connected in this milestone." actions={<Button disabled><CalendarClock size={15} />Planning unavailable</Button>}>
       {isDemo && <div className="demo-disclosure"><Badge tone="warning">Browser Demo</Badge><span>Showing local sample tasks. No learning-core requests are made in the browser.</span></div>}
-      {!isDemo && core.status !== "healthy" && <FeedServiceState status={core.status} onRetry={retry} />}
-      {!isDemo && core.status === "healthy" && core.demoStatePending && <FeedServiceState status="starting" onRetry={retry} />}
+      {!isDemo && core.status !== "healthy" && <FeedServiceState status={core.status} errorKind={core.errorKind} serviceMessage={core.serviceMessage} retryError={core.retryError} onRetry={retry} />}
+      {!isDemo && core.status === "healthy" && core.demoStatePending && <FeedServiceState status="health_checking" onRetry={retry} />}
       {!isDemo && core.status === "healthy" && core.demoStateError && <FeedDataError onRetry={retry} />}
       {(isDemo || core.demoState) && !core.demoStateError && <>
         <div className="filter-bar"><Segmented value={status} options={["today", "upcoming", "overdue", "completed"]} onChange={setStatus} /><label className="select-control"><Filter size={14} /><select aria-label="Filter by course" value={course} onChange={(event) => setCourse(event.target.value)}>{courses.map((item) => <option key={item}>{item}</option>)}</select></label></div>

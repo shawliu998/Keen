@@ -38,7 +38,9 @@ def _minimal_text_pdf(pages: Sequence[str]) -> bytes:
         page_id = len(objects) + 1
         content_id = page_id + 1
         page_ids.append(page_id)
-        escaped = page_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        escaped = (
+            page_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        )
         stream = f"BT\n/F1 14 Tf\n72 720 Td\n({escaped}) Tj\nET".encode("latin-1")
         objects.extend(
             [
@@ -54,7 +56,9 @@ def _minimal_text_pdf(pages: Sequence[str]) -> bytes:
             ]
         )
     kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
-    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("ascii")
+    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode(
+        "ascii"
+    )
 
     output = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
     offsets = [0]

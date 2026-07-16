@@ -1,9 +1,11 @@
 # Keen Learning Core
 
 Local-first FastAPI service for the Keen macOS sidecar. This first slice owns
-demo courses, study tasks, deterministic concept mastery, local document
-ingestion, and lexical citation retrieval. It does **not** call a model, create
-embeddings, perform vector search, OCR scanned PDFs, or claim semantic RAG.
+demo courses, study tasks, deterministic concept mastery, durable document
+ingestion, multilingual lexical retrieval, optional local embeddings with
+sqlite-vec hybrid search, and optional loopback-only local chat streaming. It
+does **not** OCR scanned PDFs or claim that structural citation mapping is
+factual-entailment validation.
 
 ## Security boundary
 
@@ -62,6 +64,16 @@ the token is absent from both the operating-system argument and environment
 snapshots. Optional document controls are `--documents-directory PATH` and
 `--max-document-bytes NUMBER`.
 
+Local embeddings are opt-in and all five values are required together:
+`--embedding-provider`, `--embedding-base-url`, `--embedding-model`,
+`--embedding-version`, and `--embedding-dimensions`. Supported providers are
+`ollama` and `openai-compatible`; the URL must use `http` with an explicit
+literal loopback IP and port. Provider redirects are revalidated, proxy
+environment variables are ignored, and requests have I/O and total deadlines.
+The Tauri supervisor forwards the equivalent non-secret `KEEN_EMBEDDING_*`
+values only when the complete set validates. Cloud endpoints and API keys are
+not supported.
+
 Then call, for example:
 
 ```bash
@@ -79,31 +91,49 @@ local dataset.
 `POST /v1/documents/import` accepts multipart fields `file` and optional
 `course_id`. Supported inputs are PDF (`application/pdf`), Markdown
 (`text/markdown` or `text/plain`), and TXT (`text/plain`). A new import returns
-HTTP 201; an already-indexed SHA-256 returns HTTP 200 with `duplicate: true`.
-The persisted state transitions are `queued -> parsing -> chunking -> indexed`,
-or `failed` when parsing/indexing cannot complete. Imports are serialized
-within one process and claimed with an atomic SQLite transaction so concurrent
-same-hash requests converge on one stored document.
+HTTP 202 with a durable job; an existing SHA-256 returns HTTP 200 with
+`duplicate: true`. Job status and real progress are available under
+`/v1/index-jobs`; cancel, retry, deletion, restart recovery, and many-to-many
+course links are persisted. Imports are claimed with an atomic SQLite
+transaction so concurrent same-hash requests converge on one stored document.
 
 `GET /v1/documents` lists imported records. `POST /v1/search` accepts
-`{"query":"...","courseId":null,"limit":8}` and searches deterministic
-FTS5 chunks. `POST /v1/query` returns an extractive response with citations;
+`{"query":"...","courseId":null,"limit":8}`. It normalizes once, retrieves
+bounded Latin/CJK lexical and compatible vector candidates, applies RRF,
+course filtering, deduplication and bounded adjacent merging, and returns
+`hybrid` only when the vector channel succeeds. Other cases return
+`lexical_only` with a recovery warning. `POST /v1/query` remains extractive;
 when nothing matches it returns `grounded: false`, an empty citation list, and
 an explicit note. Citations include document/chunk identifiers, one-based page
 number, section path, and a verbatim excerpt. Document chunks also persist
-normalized-text character locations. `embedding_version` remains `NULL`
-because embeddings are not implemented; PDF geometry/bounding boxes are not
-implemented either.
+normalized-text character locations. Model/version/dimensions and embedding
+state are persisted separately, and incompatible vectors never mix. A model
+change produces `needs-reindex`; its embedding-only job stages then atomically
+promotes vectors without hiding the lexical index. PDF geometry/bounding boxes
+use pdfminer character boxes aggregated into persisted line spans for standard,
+unrotated pages whose CropBox equals the zero-origin MediaBox. Rotated pages,
+translated boxes, custom user units, CropBox differences, and unavailable layout
+data deliberately keep the real page number with `bbox: null`; Keen does not
+invent a highlight. The authenticated document-content route serves only the
+canonical stored PDF and supports bounded browser range requests.
 
 Scanned or image-only PDFs are persisted with `failed` status and a recovery
 message stating that OCR is unavailable. The failed input file is removed.
 
 ## Streaming contract
 
-`POST /v1/answer/stream` returns `text/event-stream` events named `metadata`,
-`delta`, and `done`. The current answer is deliberately deterministic and has
-no citations; `metadata.mode` is `offline-demo`. A future model/retrieval
-adapter can replace this implementation without changing the transport.
+`POST /v1/answer/stream` returns authenticated `text/event-stream` events named
+`metadata`, `retrieval`, `delta`, `citation`, `warning`, `done`, and `error`.
+When an explicit loopback chat provider is configured, it performs bounded
+hybrid/lexical retrieval and streams the local model. Source text is encoded as
+untrusted user-context data; the model may cite only `[[source:N]]`, and the
+server expands merged retrieval hits into at most ten single, current database
+chunks and maps accepted indexes back to that exact metadata. The done
+event says `citationValidation: structural_only`: this validates source identity,
+course, chunk, page, section, and excerpt structure, not factual entailment.
+Missing providers and failed/truncated generation end with an error, not a
+successful offline substitute. Client disconnect cancels and closes the provider
+stream. Browser Demo does not call this route.
 
 ## Parser dependency evidence
 
@@ -116,11 +146,27 @@ inspected before adding them:
   Its embedded `METADATA` declares `License-Expression: BSD-3-Clause`, and
   `pypdf-6.14.2.dist-info/licenses/LICENSE` contains the BSD 3-Clause terms and
   copyright beginning with Mathieu Fenniak (2006-2008).
+- `pdfminer_six-20260107-py3-none-any.whl`, SHA-256
+  `366585ba97e80dffa8f00cebe303d2f381884d8637af4ce422f1df3ef38111a9`,
+  exact tag commit `9e1243c4ad000bf9bbe60e81fc8dde2fccc0ed3b`. Its main
+  license is MIT; the exact source's separate notice for pyHanko-derived elements
+  is also MIT. Both full notices are retained in `THIRD_PARTY_NOTICES.md`.
 - `python_multipart-0.0.32-py3-none-any.whl`, SHA-256
   `ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23`.
   Its embedded `METADATA` declares `License-Expression: Apache-2.0`, and
   `python_multipart-0.0.32.dist-info/licenses/LICENSE.txt` contains the Apache
   License 2.0.
+- `sqlite_vec-0.1.9-py3-none-macosx_11_0_arm64.whl`, SHA-256
+  `1d52e30513bae4cc9778ddbf6145610434081be4c3afe57cd877893bad9f6b6c`.
+  The exact source tag `v0.1.9` resolves to
+  `e9f598abfa0c06b328d8fe5da9c3760cce74be10` and contains MIT and Apache-2.0
+  license options with no NOTICE; Keen selects MIT. The wheel carries an arm64
+  `sqlite_vec/vec0.dylib` (SHA-256
+  `193e480c50b59a55977d166f4aaf0e1bc8832d6963516e5950f39e4d2ce0b793`)
+  but no license file. Its actual Mach-O deployment minimum is macOS 14.0,
+  matching Keen's declared target rather than the wheel tag's broader claim.
+  Python 3.11 load/KNN smoke passed; PyInstaller must collect this library
+  explicitly.
 
 Evidence commands used `python3 -m pip download --no-deps --only-binary=:all:`,
 `shasum -a 256`, `unzip -p <wheel> '*/METADATA'`, and `unzip -p <wheel>

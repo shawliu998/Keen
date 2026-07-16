@@ -6,6 +6,12 @@ As of the initial 2026-07-15 audit, Keen contained no vendored, copied, ported, 
 
 Do not add placeholder or guessed SHAs. Planning candidates belong in `docs/OPEN_SOURCE_INVENTORY.md`, not in this ledger.
 
+The sqlite-vec 0.1.9 integration is an unmodified package dependency at exact tag commit `e9f598abfa0c06b328d8fe5da9c3760cce74be10`. No sqlite-vec source file is copied, ported, vendored, or patched in Keen, so it has no patch entry; its artifact, native-library, license, and PyInstaller collection evidence is recorded in `docs/OPEN_SOURCE_INVENTORY.md` and `THIRD_PARTY_NOTICES.md`.
+
+The pdfminer.six 20260107 integration is an unmodified package dependency at exact tag commit `9e1243c4ad000bf9bbe60e81fc8dde2fccc0ed3b`. No pdfminer.six or pyHanko source file is copied, ported, vendored, or patched in Keen, so it has no patch entry; its exact wheel, main MIT license, and separate MIT notice for pyHanko-derived elements are recorded in `docs/OPEN_SOURCE_INVENTORY.md` and `THIRD_PARTY_NOTICES.md`.
+
+The HTTPX 0.28.1 integration is an unmodified package dependency at exact tag commit `26d48e0634e6ee9cdc0533996db289ce4b430177`. No HTTPX source file is copied, ported, vendored, or patched in Keen, so it has no patch entry; its exact wheel, license, transitive-resolution snapshot, and Python 3.11/PyInstaller evidence are recorded in `docs/OPEN_SOURCE_INVENTORY.md` and `THIRD_PARTY_NOTICES.md`.
+
 ## Recording rules
 
 Create an entry before or in the same change that introduces modified upstream source. One entry may cover a coherent patch series only when all files share the same upstream revision and license.

@@ -1,16 +1,19 @@
 # Keen
 
-Keen is a local-first macOS learning Agent. This repository is in active implementation: the desktop shell, authenticated/supervised local learning service, live frontend client, deterministic browser Demo, bounded document ingestion, FTS5 lexical retrieval, and quality harness are present. This is not yet a complete Agent or semantic RAG product.
+Keen is a local-first macOS learning Agent. This repository is in active implementation: the desktop shell, authenticated/supervised local learning service, live frontend client, deterministic browser Demo, bounded document ingestion, multilingual lexical/hybrid retrieval, and optional local model answer streaming are present. This is not yet a complete learning Agent.
 
 ## Current verified slice
 
 - React/Vite desktop experience with the core learning routes, explicit browser Demo state, and a Zod-validated loopback client. In Tauri, Learning Feed reads live tasks/mastery and Knowledge Base lists, imports, and searches live local documents; it does not silently substitute Demo records when the service is unavailable.
 - Tauri 2 macOS window configuration, native menu, persisted window state, minimal frontend capabilities, and a supervised learning-core process group. The Python child atomically binds a random `127.0.0.1` port and announces it over its trusted stdout pipe; Rust generates a 256-bit session token, sends it through the child's stdin pipe, performs startup and continuing authenticated health checks, permits one bounded restart, and terminates the full PyInstaller process group on failure or application exit.
-- FastAPI bound to `127.0.0.1` with pre-body Bearer authentication on every endpoint, bounded request bodies, SQLite migrations/demo seed, study-task APIs, deterministic BKT, and an explicitly offline/no-citation SSE response.
+- FastAPI bound to `127.0.0.1` with pre-body Bearer authentication on every endpoint, bounded request bodies, SQLite migrations/demo seed, study-task APIs, deterministic BKT, and generated-answer SSE backed only by an explicitly configured loopback chat provider.
 - Bounded PDF/Markdown/TXT ingestion with extension/MIME/content validation, incremental file hashing/copying, atomic same-hash deduplication, a cross-process database owner lock, SHA-256 content-addressed storage, resource-isolated pypdf 6.14.2 extraction, persisted/recoverable status history, FTS5 search, and deterministic extractive citations with one-based page numbers.
+- Optional loopback-only Ollama/OpenAI-compatible embeddings with exact-pinned sqlite-vec storage, model/version/dimension isolation, truthful lexical-only fallback, bounded hybrid RRF, and durable embedding-only reindex that preserves the live lexical index.
+- Optional loopback-only Ollama/OpenAI-compatible chat streaming with untrusted-source prompt boundaries, structural citation remapping, client-disconnect cancellation, and a strict live Conversation client. `grounded` does not claim factual entailment.
+- Authenticated, page-on-demand PDF.js citation viewer with a bundled local worker, exact-page navigation, persisted pdfminer line geometry for supported pages, original excerpts, bounded canvases, and an explicit page-only fallback when geometry is unavailable or unsafe.
 - Visual regression capture/diff harness. HyperKnow reference assets are not in this checkout, so the harness records a missing baseline instead of claiming a pixel-match result.
 
-Not implemented: OCR, embeddings, vector or hybrid retrieval, reranking, a PDF viewer/page highlight flow, model providers, the Agent orchestrator/tool permission runtime, secure provider-key storage, and a complete shipped third-party notice bundle.
+Not implemented: OCR, factual-entailment citation validation, reranking, cloud providers or provider-key storage, the Agent orchestrator/tool permission runtime, and a complete shipped third-party notice bundle. Rotated, translated-box, custom-user-unit, and CropBox-different PDF pages deliberately use page-only citation fallback. The arm64 `.app` and mounted DMG now verify the frozen vector/provider/PDF stack, but Developer ID signing, notarization, universal/Intel builds, and complete notices remain release blockers.
 
 See [the implementation plan](docs/IMPLEMENTATION_PLAN.md), [repository audit](docs/REPOSITORY_AUDIT.md), and [visual reference TODO](docs/VISUAL_TODO.md) for exact status and evidence gaps.
 
@@ -109,13 +112,14 @@ notarized before release.
 The current sidecar-bearing arm64 DMG passes `hdiutil verify`; after a read-only
 mount, `codesign --verify --deep --strict` passes for the app and embedded
 sidecar, and the mounted sidecar repeats the authenticated PDF/resource smoke.
-The locally generated 2026-07-16 artifact is 21,761,944 bytes with SHA-256
-`da60e4b08bd3b3c8b77e90bbc2c7a7c625009f810d44400a806081242dfc5e87`;
+The final locally generated 2026-07-16 artifact is 33,495,605 bytes with SHA-256
+`5246ab0c4955498f2891561789d9fb6a27de9fddb13790282606ddf51fb0f16f`;
 the DMG itself is gitignored rather than committed. Gatekeeper still rejects
 the local artifact because it has no Apple Developer ID signature or
 notarization ticket. Universal/Intel validation, distribution
-signing/notarization, reproducible Python locking, and complete third-party
-notices remain release blockers.
+signing/notarization, non-arm64 Python locks, and complete third-party notices
+remain release blockers. The checked-in PEP 751 runtime lock is intentionally
+limited to CPython 3.11 on macOS arm64 and is enforced by the sidecar build.
 
 ## References and third-party code
 

@@ -13,7 +13,7 @@
     "test": "npm run test --workspace=@keen/desktop",
     "typecheck": "npm run typecheck --workspace=@keen/desktop",
     "lint": "npm run lint --workspace=@keen/desktop",
-    "tauri": "npm run tauri --workspace=@keen/desktop",
+    "tauri": "node scripts/run-tauri.mjs",
     "visual:test": "npm run test --workspace=@keen/visual-regression",
     "test:python": "PYTHONPATH=services/learning-core .venv/bin/python -m pytest services/learning-core/tests",
     "test:rust": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
@@ -21,6 +21,6 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run test:python && npm run test:rust"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.16.0"
   }
 }

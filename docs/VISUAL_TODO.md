@@ -36,6 +36,16 @@ Resolve these before copying any protected visual asset:
 
 For every page above, also collect its empty, loading, partial, error, offline, permission-denied, cancelled, sidecar-unavailable, and applicable provider/index/migration failure state.
 
+2026-07-16 hardening note: the implemented shell now distinguishes binding, migrating, recovering, starting-server, health-checking, restarting, unavailable, and configuration-error service states. No authorized reference or new screenshot/diff evidence exists for these states, so their visual acceptance remains missing.
+
+2026-07-16 Gate 3 note: Knowledge Base now has real course selection, multi-course labels, relation actions, course filters, and partial course-state errors. These states passed component/integration behavior tests, but no authorized visual reference or screenshot/diff evidence exists, so visual acceptance remains missing.
+
+2026-07-16 Gate 4 note: Knowledge Base now renders provider-missing/failure, indexed-lexical, indexed-hybrid, embedding, cancelled/interrupted, and needs-reindex states with real warnings and actions. Component/integration behavior tests passed, but no authorized reference or screenshot/diff exists; visual acceptance and any parity claim remain blocked.
+
+2026-07-16 Gate 5 note: Conversation now renders real Tauri streaming, locally stopped, provider-missing, disconnected, lexical-only, structural-citation, and empty live states; Browser Demo is explicitly labeled and performs no request. Behavioral tests passed, but no authorized reference or visual-diff evidence exists, so visual acceptance remains missing.
+
+2026-07-16 Gate 6 note: Conversation now opens an authenticated page-on-demand PDF citation dialog with supported-geometry highlights, original excerpts, truthful loading/offline/error/page-only states, bounded canvas allocation, keyboard focus trapping/restoration, and a bundled local PDF.js worker. Behavioral tests passed, but no authorized reference screenshot or visual-diff evidence exists; no pixel-parity claim is made.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

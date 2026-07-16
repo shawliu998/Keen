@@ -33,9 +33,9 @@ kbd { border: 0; padding: 0; background: none; color: var(--text-tertiary); font
 .core-status { display: inline-flex; min-width: 0; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
 .core-status i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px rgba(217,154,43,.1); }
 .core-status-healthy i { background: var(--success); box-shadow: 0 0 0 3px rgba(50,160,113,.11); }
-.core-status-error i { background: var(--danger); box-shadow: 0 0 0 3px rgba(215,90,90,.1); }
+.core-status-error i, .core-status-configuration_error i { background: var(--danger); box-shadow: 0 0 0 3px rgba(215,90,90,.1); }
 .core-status-unavailable i { background: var(--text-tertiary); box-shadow: none; }
-.core-status-starting i { animation: core-pulse 1s ease-in-out infinite alternate; }
+.core-status-starting i, .core-status-binding i, .core-status-migrating i, .core-status-recovering i, .core-status-starting_server i, .core-status-health_checking i, .core-status-restarting i { animation: core-pulse 1s ease-in-out infinite alternate; }
 @keyframes core-pulse { to { opacity: .35; } }
 .online-dot, .paused-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px rgba(50,160,113,.11); }
 .paused-dot { background: var(--warning); }

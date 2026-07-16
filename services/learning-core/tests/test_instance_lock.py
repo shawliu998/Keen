@@ -6,6 +6,7 @@ import stat
 import pytest
 from fastapi.testclient import TestClient
 
+from app.database import Database
 from app.instance_lock import InstanceAlreadyRunningError, hold_database_instance_lock
 from app.main import create_app
 from app.settings import Settings
@@ -68,3 +69,47 @@ def test_second_app_cannot_recover_or_clean_an_active_database(tmp_path) -> None
                 pass
 
         assert active_upload.read_bytes() == b"active"
+
+
+def test_startup_phases_follow_completed_initialization(tmp_path) -> None:
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "phases.sqlite3",
+        document_data_path=tmp_path / "documents",
+    )
+    phases: list[str] = []
+
+    with TestClient(
+        create_app(settings, startup_phase_reporter=phases.append)
+    ) as client:
+        assert (
+            client.get(
+                "/health", headers={"Authorization": f"Bearer {TOKEN}"}
+            ).status_code
+            == 200
+        )
+        assert phases == ["migrating", "recovering", "starting_server"]
+        assert settings.document_data_path.is_dir()
+        Database(settings.database_path).verify_consistency()
+
+
+def test_startup_stops_before_starting_server_when_consistency_fails(
+    monkeypatch, tmp_path
+) -> None:
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "inconsistent.sqlite3",
+        document_data_path=tmp_path / "documents",
+    )
+    phases: list[str] = []
+
+    def fail_consistency_check(_database: Database) -> None:
+        raise RuntimeError("consistency failure")
+
+    monkeypatch.setattr(Database, "verify_consistency", fail_consistency_check)
+
+    with pytest.raises(RuntimeError, match="consistency failure"):
+        with TestClient(create_app(settings, startup_phase_reporter=phases.append)):
+            pass
+
+    assert phases == ["migrating", "recovering"]

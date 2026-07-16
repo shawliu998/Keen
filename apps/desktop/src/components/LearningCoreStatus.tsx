@@ -3,8 +3,15 @@ import type { LearningCoreStatus as Status } from "../services/LearningCoreProvi
 const labels: Record<Status, string> = {
   demo: "Browser Demo · no service calls",
   starting: "Learning core starting…",
-  healthy: "Learning core healthy",
+  binding: "Learning core binding…",
+  migrating: "Learning core migrating…",
+  recovering: "Learning core recovering…",
+  starting_server: "Learning core starting server…",
+  health_checking: "Learning core checking health…",
+  restarting: "Learning core restarting…",
+  healthy: "Learning core ready",
   unavailable: "Learning core unavailable",
+  configuration_error: "Learning core configuration error",
   error: "Learning core error",
 };
 

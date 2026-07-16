@@ -19,7 +19,7 @@
     "paths": {
       "@keen/api-client": ["../../packages/api-client/src/index.ts"]
     },
-    "types": ["vitest/globals", "@testing-library/jest-dom"]
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
   "include": ["src", "tests", "../../packages/api-client/src", "../../packages/domain/src", "../../packages/ui/src"]
 }
