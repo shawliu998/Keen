@@ -55,6 +55,7 @@ from .instance_lock import hold_database_instance_lock
 from .knowledge_state import enrich_document_knowledge_state
 from .repository import LearningRepository
 from .request_guard import RequestGuardMiddleware
+from .routers.agent_mutations import router as agent_mutations_router
 from .routers.agent_runs import router as agent_runs_router
 from .retrieval_service import (
     HybridRetrievalService,
@@ -86,6 +87,7 @@ from .schemas import (
 )
 from .settings import Settings
 from .services.agent_runtime import AgentProviderFactory, AgentRuntimeManager
+from .services.agent_undo import AgentUndoService
 from .retrieval_interfaces import EmbeddingModel
 from .storage_reconciliation import (
     StoredFileDeleteError,
@@ -134,6 +136,7 @@ def create_app(
 
             report_startup_phase("recovering")
             interrupted_agent_runs = app.state.agent_runtime.recover_interrupted_runs()
+            recovered_agent_actions = app.state.agent_undo.recover_interrupted_actions()
             ensure_private_directory(settings.document_data_path)
             with app.state.database.connection() as connection:
                 interrupted_jobs = IndexJobRepository(connection).interrupt_active_jobs(
@@ -161,6 +164,10 @@ def create_app(
                     "interrupted_imports_recovered": len(recovered),
                     "interrupted_jobs_recovered": len(interrupted_jobs),
                     "interrupted_agent_runs_recovered": len(interrupted_agent_runs),
+                    "agent_actions_recovered": recovered_agent_actions["recovered"],
+                    "agent_actions_terminalized": recovered_agent_actions[
+                        "terminalized"
+                    ],
                     "temporary_uploads_removed": incoming_removed,
                     "storage_reconciliation": reconciliation,
                 },
@@ -198,6 +205,7 @@ def create_app(
         app.state.database,
         provider_factory=agent_provider_factory,
     )
+    app.state.agent_undo = AgentUndoService(app.state.database)
     app.state.document_import_lock = threading.Lock()
     app.state.document_processing_lock = threading.Lock()
     app.state.embedding_provider_factory = (
@@ -274,6 +282,7 @@ def create_app(
         )
 
     app.include_router(agent_runs_router)
+    app.include_router(agent_mutations_router)
 
     @app.get("/v1/courses", response_model=list[Course])
     def list_courses(repository: LearningRepository = Depends(_repository)):

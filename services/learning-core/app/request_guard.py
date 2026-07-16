@@ -20,6 +20,20 @@ BOUNDED_JSON_PATHS = frozenset(
 )
 
 
+def _is_agent_mutation_action(path: object) -> bool:
+    if not isinstance(path, str):
+        return False
+    segments = path.split("/")
+    return (
+        len(segments) == 8
+        and segments[1:4] == ["v1", "agent", "runs"]
+        and segments[5] == "mutations"
+        and segments[7] in {"undo", "redo"}
+        and bool(segments[4])
+        and bool(segments[6])
+    )
+
+
 class _RequestBodyTooLarge(Exception):
     """Internal control flow used to stop downstream parsing immediately."""
 
@@ -79,7 +93,10 @@ class RequestGuardMiddleware:
         is_document_import = (
             method == "POST" and scope.get("path") == "/v1/documents/import"
         )
-        is_bounded_json = method == "POST" and scope.get("path") in BOUNDED_JSON_PATHS
+        path = scope.get("path")
+        is_bounded_json = method == "POST" and (
+            path in BOUNDED_JSON_PATHS or _is_agent_mutation_action(path)
+        )
         if not is_document_import and not is_bounded_json:
             await self.app(scope, receive, send)
             return

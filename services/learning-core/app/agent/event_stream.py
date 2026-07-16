@@ -89,6 +89,18 @@ class AgentEventStore:
         with self._database.connection() as connection:
             return AgentRepository(connection).get_run(run_id)
 
+    def has_active_steps(self, run_id: str) -> bool:
+        self._validate_identifier(run_id, label="run ID")
+        with self._database.connection() as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM agent_steps "
+                    "WHERE run_id = ? AND status IN ('pending', 'running') LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                is not None
+            )
+
     def start_run(
         self, run_id: str, *, metadata: dict[str, object]
     ) -> list[DurableAgentEvent]:
@@ -132,29 +144,43 @@ class AgentEventStore:
         *,
         run_id: str,
         step_id: str,
-        ordinal: int,
+        ordinal: int | None,
         invocation_id: str,
         tool_name: str,
+        input_data: dict[str, object] | None = None,
     ) -> DurableAgentEvent:
         self._validate_identifier(run_id, label="run ID")
         self._validate_identifier(step_id, label="step ID")
+        safe_input = self._payload(input_data or {"toolName": tool_name})
+        if safe_input.get("toolName") != tool_name:
+            raise ValueError("Agent tool step input must identify its tool")
         now = datetime.now(UTC).isoformat()
         with self._database.connection() as connection:
             repository = AgentRepository(connection)
             connection.execute("BEGIN IMMEDIATE")
             try:
                 existing = connection.execute(
-                    "SELECT run_id, ordinal, kind, status, label FROM agent_steps WHERE id = ?",
+                    "SELECT run_id, ordinal, kind, status, label, input_json "
+                    "FROM agent_steps WHERE id = ?",
                     (step_id,),
                 ).fetchone()
                 if existing is None:
+                    selected_ordinal = ordinal
+                    if selected_ordinal is None:
+                        selected_ordinal = int(
+                            connection.execute(
+                                "SELECT COALESCE(MAX(ordinal), -1) + 1 "
+                                "FROM agent_steps WHERE run_id = ?",
+                                (run_id,),
+                            ).fetchone()[0]
+                        )
                     repository.add_step(
                         step_id=step_id,
                         run_id=run_id,
-                        ordinal=ordinal,
+                        ordinal=selected_ordinal,
                         kind="tool",
                         label=tool_name,
-                        input_data={"toolName": tool_name},
+                        input_data=safe_input,
                         commit=False,
                     )
                     connection.execute(
@@ -167,8 +193,13 @@ class AgentEventStore:
                     )
                     replay_candidate = False
                 else:
-                    expected = (run_id, "tool", tool_name)
-                    actual = (existing["run_id"], existing["kind"], existing["label"])
+                    expected = (run_id, "tool", tool_name, safe_input)
+                    actual = (
+                        existing["run_id"],
+                        existing["kind"],
+                        existing["label"],
+                        json.loads(str(existing["input_json"])),
+                    )
                     if actual != expected:
                         raise ValueError(
                             "stable Agent step ID was reused inconsistently"
@@ -479,15 +510,23 @@ class DurableEventStream:
         after_sequence = self._store.sequence_after_last_event_id(run_id, last_event_id)
         while True:
             events = self._store.list_events(run_id, after_sequence=after_sequence)
+            terminal_seen = False
             for event in events:
                 after_sequence = event.sequence
                 yield event
                 if event.event_type in _TERMINAL_EVENT_TYPES:
-                    return
+                    # A user-triggered Level 2 inverse may append durable audit
+                    # events after the original run's terminal event. Replay the
+                    # complete persisted batch before closing the finite stream.
+                    terminal_seen = True
+            if terminal_seen and not self._store.has_active_steps(run_id):
+                return
             run = self._store.get_run(run_id)
             if run is None:
                 raise LookupError("agent run not found")
-            if run["status"] in _TERMINAL_RUN_STATUSES:
+            if run[
+                "status"
+            ] in _TERMINAL_RUN_STATUSES and not self._store.has_active_steps(run_id):
                 return
             if disconnected is not None and disconnected.is_set():
                 return

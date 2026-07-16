@@ -33,10 +33,10 @@ def _scope_for_path(path: str, headers: list[tuple[bytes, bytes]]) -> dict:
     return scope
 
 
-def test_answer_json_content_length_and_chunked_stream_are_capped_before_parsing() -> (
+def test_bounded_json_content_length_and_chunked_stream_are_capped_before_parsing() -> (
     None
 ):
-    async def exercise(*, declared: bool) -> tuple[list[dict], int]:
+    async def exercise(*, path: str, declared: bool) -> tuple[list[dict], int]:
         chunks_read = 0
         sent: list[dict] = []
         chunks = [b"x" * SMALL_JSON_REQUEST_BYTES, b"overflow"]
@@ -64,16 +64,21 @@ def test_answer_json_content_length_and_chunked_stream_are_capped_before_parsing
         middleware = RequestGuardMiddleware(
             downstream, session_token=TOKEN, max_document_bytes=1024
         )
-        await middleware(_scope_for_path("/v1/answer/stream", headers), receive, send)
+        await middleware(_scope_for_path(path, headers), receive, send)
         return sent, chunks_read
 
-    declared_sent, declared_reads = asyncio.run(exercise(declared=True))
-    chunked_sent, chunked_reads = asyncio.run(exercise(declared=False))
+    for path in (
+        "/v1/answer/stream",
+        "/v1/agent/runs/run-1/mutations/mutation-1/undo",
+        "/v1/agent/runs/run-1/mutations/mutation-1/redo",
+    ):
+        declared_sent, declared_reads = asyncio.run(exercise(path=path, declared=True))
+        chunked_sent, chunked_reads = asyncio.run(exercise(path=path, declared=False))
 
-    assert declared_sent[0]["status"] == 413
-    assert declared_reads == 0
-    assert chunked_sent[0]["status"] == 413
-    assert chunked_reads == 2
+        assert declared_sent[0]["status"] == 413
+        assert declared_reads == 0
+        assert chunked_sent[0]["status"] == 413
+        assert chunked_reads == 2
 
 
 def test_unauthorized_request_is_rejected_before_any_body_chunk_is_read() -> None:
