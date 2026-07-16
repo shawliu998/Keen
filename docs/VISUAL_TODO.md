@@ -61,8 +61,10 @@ Status on 2026-07-16: **in progress** at the milestone level; the following live
 No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: the repository still has neither the canonical authorized-scope document nor authorized HyperKnow screenshots/assets. Continue only with provisional non-branded design values, and do not copy protected brand assets or claim parity.
 
 2026-07-16 learning-loop Gate 3 note: backend product tools can now read Study
-Feed/due Review rows and complete a Study Task transactionally, but no frontend
-surface invokes them. Therefore the visual rows above remain `not started`; no
+Feed/due Review rows and complete a Study Task transactionally. The
+provider-neutral orchestrator persists durable events and supports SSE cursor
+replay at the service layer, but no Agent route or frontend surface consumes
+that stream. Therefore the visual rows above remain `not started`; no
 screenshot, reference comparison or parity result is claimed.
 
 ## Reference manifest fields

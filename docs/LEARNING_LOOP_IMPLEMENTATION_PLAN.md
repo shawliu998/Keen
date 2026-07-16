@@ -143,8 +143,12 @@ executor, atomic Level 2 transaction handoff, typed inverse mutation and
 redacted audit boundary are verified as a foundation. Initial typed product
 tools can read real Study Feed and due-Review rows, complete a course-scoped
 Study Task inside the caller transaction, and keep export at unavailable Level
-3. SQLite AuditSink integration, replay/idempotency, Undo execution,
-orchestrator, SSE/reconnect, UI and provider integration remain `not started`.
+3. A single-provider orchestrator service persists ordered public events and
+supports durable SSE cursor replay, bounded streams, tool-step lifecycle and
+cancellation/error terminal states. SQLite AuditSink integration,
+replay/idempotency and Undo execution are `in progress`; FastAPI routes,
+process-restart provider continuation, UI and real provider selection remain
+`not started`.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
 
@@ -374,6 +378,13 @@ The initial product-tool subset passed 6/6 focused tests against real SQLite
 rows, including course scoping, UTC validation, transaction rollback and typed
 Undo output. It is a bounded integration slice, not evidence that all tool
 groups or the orchestrator are complete.
+
+The provider-neutral orchestrator/durable-event slice passed 17/17 focused
+tests and 63/63 combined Agent tests. It verifies explicit provider completion,
+ordered redacted events, real step foreign keys/status, stable tool replay,
+Last-Event-ID continuation, cancellation races, global single-run enforcement
+and action/content/payload limits. It does not resume provider execution after
+a process restart and therefore does not satisfy the full Gate exit.
 
 ### Gate 4 — durable Conversation and Deep Learn
 
