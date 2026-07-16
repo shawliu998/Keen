@@ -137,7 +137,12 @@ Every JSON text column must pass Pydantic/Zod validation at the boundary and `js
 
 ## Agent runs, tools and permissions
 
-Status: **verified** for the persistence/permission repository boundary; the Agent orchestrator, registered product tools, SSE execution, Undo UI, and provider integration remain `not started`.
+Status: **in progress**. Persistence repositories plus the typed registry,
+permission/effect checks, bounded tool contracts, cancellable single-step
+executor, atomic Level 2 transaction handoff, typed inverse mutation and
+redacted audit boundary are verified as a foundation. SQLite AuditSink
+integration, replay/idempotency, Undo execution, registered product tools,
+orchestrator, SSE/reconnect, UI and provider integration remain `not started`.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
 
@@ -348,11 +353,20 @@ transaction.
 
 ### Gate 3 — Agent orchestrator
 
-Status: **not started**.
+Status: **in progress** for the reviewed tool/executor foundation; the Gate exit
+condition is not yet met.
 
 - Test tool schemas, Level 1/2/3 policy, atomic audit/mutation, Undo, redaction, SSE ordering, cancel, reconnect and replay idempotency.
 - Use a fixed automation-only provider; never substitute it in the real UI.
 - Exit: every tool/mutation is traceable and no model path can write arbitrary state.
+
+Foundation evidence: registry/executor plus the existing Agent repository tests
+passed 35/35 with one existing Starlette warning; Ruff lint/format and
+`git diff --check` passed. Independent review found and verified fixes for ID
+content leaking into audit, disguised hidden-reasoning keys, non-executable Undo
+payloads, and loss of raw typed mutations at the persistence boundary. Replay,
+real SQLite audit integration, Undo execution, orchestration and SSE remain
+explicitly unverified, so Gate 3 is not complete.
 
 ### Gate 4 — durable Conversation and Deep Learn
 
