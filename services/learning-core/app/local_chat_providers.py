@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -31,6 +32,7 @@ class _LocalChatProvider:
     _MAX_REDIRECTS = 5
     _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
     _MAX_LINE_BYTES = 1024 * 1024
+    _MAX_AGENT_JSON_RESPONSE_BYTES = 1024 * 1024
 
     def __init__(
         self,
@@ -112,6 +114,117 @@ class _LocalChatProvider:
                     "local chat provider redirect target is not permitted"
                 ) from exc
             redirects_followed += 1
+
+    async def complete_agent_json(
+        self, body: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Send a bounded non-streaming JSON request for a structured Agent run.
+
+        This intentionally validates only the transport envelope. Callers own the
+        provider-specific response and tool-call protocol validation.
+        """
+
+        response: httpx.Response | None = None
+        try:
+            async with asyncio.timeout(self._total_timeout):
+                response = await self._open_response(body)
+                return await self._read_agent_json_response(response)
+        except TimeoutError as exc:
+            raise LocalProviderTimeoutError(
+                "local chat provider exceeded the total time limit"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise LocalProviderTimeoutError(
+                "local chat provider response timed out"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise LocalProviderError("local chat provider response failed") from exc
+        finally:
+            if response is not None:
+                active_exception = sys.exception()
+                try:
+                    await response.aclose()
+                except BaseException as exc:
+                    if active_exception is not None:
+                        # Cleanup is best-effort once a request has already failed or
+                        # been cancelled. Preserve that primary outcome for the caller.
+                        pass
+                    elif isinstance(exc, httpx.TimeoutException):
+                        raise LocalProviderTimeoutError(
+                            "local chat provider response close timed out"
+                        ) from exc
+                    elif isinstance(exc, httpx.HTTPError):
+                        raise LocalProviderError(
+                            "local chat provider response close failed"
+                        ) from exc
+                    else:
+                        raise
+
+    async def _read_agent_json_response(
+        self, response: httpx.Response
+    ) -> dict[str, object]:
+        content_type = response.headers.get("content-type", "")
+        media_type = content_type.partition(";")[0].strip().lower()
+        if media_type != "application/json":
+            raise LocalProviderResponseError(
+                "local chat provider returned a non-JSON response"
+            )
+
+        content_encoding = response.headers.get("content-encoding")
+        if (
+            content_encoding is not None
+            and content_encoding.strip().lower() != "identity"
+        ):
+            raise LocalProviderResponseError(
+                "local chat provider returned an unsupported content encoding"
+            )
+
+        content_length = response.headers.get("content-length")
+        if content_length is not None:
+            length = content_length.strip()
+            if (
+                not length
+                or not length.isascii()
+                or not length.isdigit()
+                or int(length) > self._MAX_AGENT_JSON_RESPONSE_BYTES
+            ):
+                raise LocalProviderResponseError(
+                    "local chat provider response exceeded the size limit"
+                )
+
+        if response.is_stream_consumed:
+            raw_body = response.content
+            if len(raw_body) > self._MAX_AGENT_JSON_RESPONSE_BYTES:
+                raise LocalProviderResponseError(
+                    "local chat provider response exceeded the size limit"
+                )
+        else:
+            chunks: list[bytes] = []
+            received = 0
+            async for chunk in response.aiter_raw():
+                received += len(chunk)
+                if received > self._MAX_AGENT_JSON_RESPONSE_BYTES:
+                    raise LocalProviderResponseError(
+                        "local chat provider response exceeded the size limit"
+                    )
+                chunks.append(chunk)
+            raw_body = b"".join(chunks)
+
+        try:
+            payload = json.loads(
+                raw_body.decode("utf-8"),
+                object_pairs_hook=_object_without_duplicate_keys,
+                parse_constant=_reject_json_constant,
+            )
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise LocalProviderResponseError(
+                "local chat provider returned malformed JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise LocalProviderResponseError(
+                "local chat provider response must be an object"
+            )
+        return cast(dict[str, object], payload)
 
     async def _response_lines(
         self, response: httpx.Response, *, media_types: frozenset[str]
@@ -402,7 +515,11 @@ def _validate_messages(messages: Sequence[ChatMessage]) -> tuple[ChatMessage, ..
 
 def _parse_object(value: str) -> Mapping[str, Any]:
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(
+            value,
+            object_pairs_hook=_object_without_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
     except ValueError as exc:
         raise LocalProviderResponseError(
             "local chat provider returned malformed JSON"
@@ -412,3 +529,18 @@ def _parse_object(value: str) -> Mapping[str, Any]:
             "local chat provider response must be an object"
         )
     return parsed
+
+
+def _object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, item in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = item
+    return result
+
+
+def _reject_json_constant(_value: str) -> object:
+    raise ValueError("non-finite JSON number")

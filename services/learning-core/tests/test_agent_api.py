@@ -6,8 +6,10 @@ import json
 import threading
 import time
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from app.agent.provider import (
@@ -23,7 +25,12 @@ from app.agent.provider import (
 from app.chat_interfaces import ChatMessage, ChatModel
 from app.database import Database
 from app.main import create_app
+from app.local_chat_providers import OllamaChatProvider
 from app.repositories.agent_repository import AgentRepository
+from app.repositories.conversation_repository import ConversationRepository
+from app.repositories.review_repository import ReviewRepository
+from app.repositories.task_repository import TaskRepository
+from app.review.scheduler import SCHEDULER_VERSION
 from app.settings import LocalChatSettings, Settings
 
 TOKEN = "0123456789abcdef0123456789abcdef"
@@ -175,6 +182,171 @@ def test_local_chat_configuration_automatically_drives_real_agent_run(tmp_path):
         "keen-local",
         "model-v7+keen-agent-text-v1",
     )
+
+
+def test_concrete_ollama_agent_executes_scoped_read_tool_without_public_data_leak(
+    tmp_path,
+):
+    local_chat = LocalChatSettings(
+        provider="ollama",
+        base_url="http://127.0.0.1:11434",
+        model="keen-local",
+        version="model-v7",
+    )
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "agent-api.sqlite3",
+        local_chat=local_chat,
+        seed_demo=True,
+    )
+    request_bodies: list[dict[str, object]] = []
+    private_marker = "private-review-prompt-marker-never-public"
+    responses = iter(
+        (
+            {
+                "model": "keen-local",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "list_due_reviews",
+                                "arguments": {"limit": 1},
+                            }
+                        }
+                    ],
+                },
+                "done": True,
+                "done_reason": "stop",
+            },
+            {
+                "model": "keen-local",
+                "message": {
+                    "role": "assistant",
+                    "content": "You have one due review.",
+                },
+                "done": True,
+                "done_reason": "stop",
+            },
+        )
+    )
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        request_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json=next(responses),
+        )
+
+    def chat_provider_factory(
+        configuration: LocalChatSettings,
+    ) -> OllamaChatProvider:
+        return OllamaChatProvider(
+            base_url=configuration.base_url,
+            model=configuration.model,
+            version=configuration.version,
+            transport=httpx.MockTransport(handle_request),
+        )
+
+    with TestClient(
+        create_app(settings, chat_provider_factory=chat_provider_factory)
+    ) as client:
+        with Database(settings.database_path).connection() as connection:
+            ConversationRepository(connection).create_conversation(
+                conversation_id="conversation-concrete-structured",
+                title="Concrete structured provider",
+                course_id="course-calculus",
+            )
+            ReviewRepository(connection).create_item(
+                item_id="review-private-due",
+                course_id="course-calculus",
+                concept_id="concept-chain-rule",
+                item_type="flashcard",
+                prompt=private_marker,
+                expected_answer="private answer",
+                source_type="manual",
+                source_id=None,
+                due_at="2000-01-01T00:00:00+00:00",
+                scheduler_version=SCHEDULER_VERSION,
+                idempotency_key="review-private-due-key",
+            )
+        created = client.post(
+            "/v1/agent/runs",
+            headers=AUTH,
+            json={
+                **_payload(key="agent-api-concrete-structured"),
+                "conversationId": "conversation-concrete-structured",
+            },
+        )
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        terminal = _wait_for_terminal(client, run_id)
+        assert terminal["status"] == "completed", terminal
+
+        events = _sse_events(
+            client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH).text
+        )
+        event_types = [event["event"] for event in events]
+        assert "tool_start" in event_types
+        assert "tool_result" in event_types
+        assert "content_delta" in event_types
+        assert event_types[-1] == "done"
+        assert private_marker not in "\n".join(event["data"] for event in events)
+        assert json.loads(events[0]["data"])["providerVersion"] == (
+            "model-v7+keen-agent-structured-v1"
+        )
+
+    assert len(request_bodies) == 2
+    first_request, second_request = request_bodies
+    assert first_request["stream"] is False
+    assert first_request["think"] is False
+    assert {tool["function"]["name"] for tool in first_request["tools"]} == {
+        "list_study_feed",
+        "list_due_reviews",
+    }
+    catalog_fields = {
+        field
+        for tool in first_request["tools"]
+        for field in tool["function"]["parameters"].get("properties", {})
+    }
+    assert catalog_fields == {"limit"}
+    assert not {"course_id", "as_of", "due_at"} & catalog_fields
+    assert second_request["messages"][-2]["role"] == "assistant"
+    assert second_request["messages"][-2]["tool_calls"][0]["function"]["name"] == (
+        "list_due_reviews"
+    )
+    tool_message = second_request["messages"][-1]
+    assert tool_message["role"] == "tool"
+    assert tool_message["tool_name"] == "list_due_reviews"
+    tool_feedback = json.loads(tool_message["content"])
+    assert tool_feedback["trust"] == "untrusted_tool_data"
+    assert tool_feedback["output"]["review_items"] == [
+        {
+            "review_item_id": "review-private-due",
+            "course_id": "course-calculus",
+            "concept_id": "concept-chain-rule",
+            "item_type": "flashcard",
+            "prompt": private_marker,
+            "due_at": tool_feedback["output"]["review_items"][0]["due_at"],
+            "state": "new",
+            "revision": 0,
+        }
+    ]
+    with Database(settings.database_path).connection() as connection:
+        persisted = connection.execute(
+            "SELECT prompt_version FROM agent_runs WHERE id = ?", (run_id,)
+        ).fetchone()[0]
+        task = connection.execute(
+            "SELECT status, revision FROM study_tasks WHERE id = 'task-chain-rule'"
+        ).fetchone()
+        assert tuple(task) == ("upcoming", 0)
+        assert (
+            connection.execute("SELECT count(*) FROM state_mutations").fetchone()[0]
+            == 0
+        )
+    assert persisted == "model-v7+keen-agent-structured-v1"
 
 
 def test_explicit_agent_provider_factory_precedes_local_chat_configuration(tmp_path):
@@ -492,27 +664,24 @@ class _ReleasedActionsProvider(FixedAutomationProvider):
             yield action
 
 
-class _UndeclaredToolProvider:
-    name = "undeclared-tools"
-    model = "unsafe-tool-attempt"
+class _ToolCallingProvider:
+    name = "tool-calling-provider"
+    model = "scoped-tool-test"
     version = "v1"
 
-    def __init__(self) -> None:
+    def __init__(self, calls: list[ToolCall], *, blocked: bool = False) -> None:
+        self.calls = calls
         self.feedback: list[ProviderToolResult] = []
         self.closed = False
+        self.release = threading.Event()
+        if not blocked:
+            self.release.set()
 
     async def stream(self, request: ProviderRequest) -> AsyncIterator[ProviderAction]:
         del request
-        yield ToolCall(
-            call_id="unapproved-complete",
-            tool_name="complete_study_task",
-            arguments={
-                "task_id": "task-chain-rule",
-                "course_id": "course-calculus",
-                "expected_revision": 0,
-                "completed_at": "2026-07-16T10:00:00Z",
-            },
-        )
+        await asyncio.to_thread(self.release.wait)
+        for call in self.calls:
+            yield call
         yield ProviderFinished()
 
     async def submit_tool_result(self, result: ProviderToolResult) -> None:
@@ -522,14 +691,52 @@ class _UndeclaredToolProvider:
         self.closed = True
 
 
-def test_runtime_denies_tools_for_provider_without_reviewed_allowlist(tmp_path):
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        (
+            "complete_study_task",
+            {
+                "task_id": "task-chain-rule",
+                "course_id": "course-calculus",
+                "expected_revision": 0,
+                "completed_at": "2026-07-16T10:00:00Z",
+            },
+        ),
+        ("export_study_data", {"course_id": "course-calculus", "format": "json"}),
+    ],
+)
+def test_production_runtime_rejects_level_two_and_three_before_tool_start(
+    tmp_path, tool_name, arguments
+):
     settings = _settings(tmp_path, seed_demo=True)
-    provider = _UndeclaredToolProvider()
+    provider = _ToolCallingProvider(
+        [
+            ToolCall(
+                call_id=f"unapproved-{tool_name}",
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+        ]
+    )
 
     with TestClient(
         create_app(settings, agent_provider_factory=lambda: provider)
     ) as client:
-        created = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        with Database(settings.database_path).connection() as connection:
+            ConversationRepository(connection).create_conversation(
+                conversation_id="conversation-scoped-denial",
+                title="Scoped denial",
+                course_id="course-calculus",
+            )
+        created = client.post(
+            "/v1/agent/runs",
+            headers=AUTH,
+            json={
+                **_payload(key=f"agent-api-deny-{tool_name}"),
+                "conversationId": "conversation-scoped-denial",
+            },
+        )
         assert created.status_code == 202
         run_id = created.json()["id"]
         terminal = _wait_for_terminal(client, run_id)
@@ -553,11 +760,181 @@ def test_runtime_denies_tools_for_provider_without_reviewed_allowlist(tmp_path):
     assert provider.closed is True
 
 
-def test_level_two_tool_starts_after_post_and_uses_background_owned_connection(
-    tmp_path,
+def test_production_read_tools_use_persisted_course_and_run_creation_time(tmp_path):
+    settings = _settings(tmp_path, seed_demo=True)
+    provider = _ToolCallingProvider(
+        [
+            ToolCall(
+                call_id="read-feed",
+                tool_name="list_study_feed",
+                arguments={"limit": 50},
+            ),
+            ToolCall(
+                call_id="read-reviews",
+                tool_name="list_due_reviews",
+                arguments={"limit": 50},
+            ),
+        ],
+        blocked=True,
+    )
+
+    with TestClient(
+        create_app(settings, agent_provider_factory=lambda: provider)
+    ) as client:
+        with Database(settings.database_path).connection() as connection:
+            ConversationRepository(connection).create_conversation(
+                conversation_id="conversation-calculus-tools",
+                title="Calculus tools",
+                course_id="course-calculus",
+            )
+        created = client.post(
+            "/v1/agent/runs",
+            headers=AUTH,
+            json={
+                **_payload(key="agent-api-scoped-reads"),
+                "conversationId": "conversation-calculus-tools",
+            },
+        )
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        created_at = datetime.fromisoformat(created.json()["createdAt"]).astimezone(UTC)
+        after_created_at = created_at + timedelta(seconds=1)
+
+        with Database(settings.database_path).connection() as connection:
+            tasks = TaskRepository(connection)
+            for task_id, course_id, scheduled_for in (
+                ("task-visible-at-run-start", "course-calculus", created_at),
+                ("task-after-run-start", "course-calculus", after_created_at),
+                ("task-other-course-at-run-start", "course-physics", created_at),
+            ):
+                tasks.create_task(
+                    task_id=task_id,
+                    course_id=course_id,
+                    title=task_id,
+                    reason="Runtime scope test",
+                    due_at=created_at.isoformat(),
+                    estimated_minutes=5,
+                    source_type="manual",
+                    source_id=None,
+                    priority_score=0.5,
+                    priority_components={},
+                    recommended_reason="Runtime scope test",
+                    scheduled_for=scheduled_for.isoformat(),
+                    idempotency_key=f"{task_id}-key",
+                )
+            reviews = ReviewRepository(connection)
+            for item_id, course_id, concept_id, due_at in (
+                (
+                    "review-visible-at-run-start",
+                    "course-calculus",
+                    "concept-chain-rule",
+                    created_at,
+                ),
+                (
+                    "review-after-run-start",
+                    "course-calculus",
+                    "concept-chain-rule",
+                    after_created_at,
+                ),
+                (
+                    "review-other-course-at-run-start",
+                    "course-physics",
+                    "concept-newton-2",
+                    created_at,
+                ),
+            ):
+                reviews.create_item(
+                    item_id=item_id,
+                    course_id=course_id,
+                    concept_id=concept_id,
+                    item_type="flashcard",
+                    prompt=item_id,
+                    expected_answer="test answer",
+                    source_type="manual",
+                    source_id=None,
+                    due_at=due_at.isoformat(),
+                    scheduler_version=SCHEDULER_VERSION,
+                    idempotency_key=f"{item_id}-key",
+                )
+
+        provider.release.set()
+        assert _wait_for_terminal(client, run_id)["status"] == "completed"
+
+    assert len(provider.feedback) == 2
+    task_ids = {task["task_id"] for task in provider.feedback[0].output["tasks"]}
+    assert "task-visible-at-run-start" in task_ids
+    assert "task-after-run-start" not in task_ids
+    assert "task-other-course-at-run-start" not in task_ids
+    review_ids = {
+        item["review_item_id"] for item in provider.feedback[1].output["review_items"]
+    }
+    assert "review-visible-at-run-start" in review_ids
+    assert "review-after-run-start" not in review_ids
+    assert "review-other-course-at-run-start" not in review_ids
+    assert provider.closed is True
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "forged_arguments"),
+    [
+        ("list_study_feed", {"course_id": "course-physics"}),
+        ("list_study_feed", {"as_of": "2099-01-01T00:00:00Z"}),
+        ("list_due_reviews", {"course_id": "course-physics"}),
+        ("list_due_reviews", {"due_at": "2099-01-01T00:00:00Z"}),
+    ],
+)
+def test_production_read_tools_reject_provider_scope_and_time(
+    tmp_path, tool_name, forged_arguments
 ):
     settings = _settings(tmp_path, seed_demo=True)
-    provider = _ReleasedActionsProvider(
+    provider = _ToolCallingProvider(
+        [
+            ToolCall(
+                call_id=f"forged-{tool_name}",
+                tool_name=tool_name,
+                arguments={"limit": 10, **forged_arguments},
+            )
+        ]
+    )
+
+    with TestClient(
+        create_app(settings, agent_provider_factory=lambda: provider)
+    ) as client:
+        with Database(settings.database_path).connection() as connection:
+            ConversationRepository(connection).create_conversation(
+                conversation_id="conversation-forged-scope",
+                title="Forged scope",
+                course_id="course-calculus",
+            )
+        created = client.post(
+            "/v1/agent/runs",
+            headers=AUTH,
+            json={
+                **_payload(
+                    key=f"agent-api-forged-{tool_name}-{next(iter(forged_arguments))}"
+                ),
+                "conversationId": "conversation-forged-scope",
+            },
+        )
+        run_id = created.json()["id"]
+        terminal = _wait_for_terminal(client, run_id)
+        assert terminal["status"] == "failed"
+        assert terminal["errorCode"] == "validation_error"
+
+    with Database(settings.database_path).connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM tool_invocations WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+            == 0
+        )
+    assert provider.feedback == []
+    assert provider.closed is True
+
+
+def test_exact_fixed_automation_fixture_retains_level_two_runtime(tmp_path):
+    settings = _settings(tmp_path, seed_demo=True)
+    provider = FixedAutomationProvider(
         [
             ToolCall(
                 call_id="complete-task",
@@ -579,14 +956,6 @@ def test_level_two_tool_starts_after_post_and_uses_background_owned_connection(
         response = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
         assert response.status_code == 202
         run_id = response.json()["id"]
-        with Database(settings.database_path).connection() as connection:
-            assert (
-                connection.execute(
-                    "SELECT status FROM study_tasks WHERE id = 'task-chain-rule'"
-                ).fetchone()[0]
-                == "upcoming"
-            )
-        provider.release.set()
         assert _wait_for_terminal(client, run_id)["status"] == "completed"
         events = _sse_events(
             client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH).text
@@ -612,6 +981,49 @@ def test_level_two_tool_starts_after_post_and_uses_background_owned_connection(
         "status": "completed",
         "revision": 1,
     }
+
+
+def test_fixed_automation_subclass_cannot_obtain_fixture_write_capability(tmp_path):
+    settings = _settings(tmp_path, seed_demo=True)
+    provider = _ReleasedActionsProvider(
+        [
+            ToolCall(
+                call_id="subclass-complete-task",
+                tool_name="complete_study_task",
+                arguments={
+                    "task_id": "task-chain-rule",
+                    "course_id": "course-calculus",
+                    "expected_revision": 0,
+                    "completed_at": "2026-07-16T10:00:00Z",
+                },
+            ),
+            ProviderFinished(),
+        ]
+    )
+    provider.release.set()
+
+    with TestClient(
+        create_app(settings, agent_provider_factory=lambda: provider)
+    ) as client:
+        response = client.post("/v1/agent/runs", headers=AUTH, json=_payload())
+        assert response.status_code == 202
+        run_id = response.json()["id"]
+        terminal = _wait_for_terminal(client, run_id)
+        assert terminal["status"] == "failed"
+        assert terminal["errorCode"] == "provider_protocol_error"
+        with Database(settings.database_path).connection() as connection:
+            assert (
+                connection.execute(
+                    "SELECT status FROM study_tasks WHERE id = 'task-chain-rule'"
+                ).fetchone()[0]
+                == "upcoming"
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM tool_invocations WHERE run_id = ?", (run_id,)
+                ).fetchone()[0]
+                == 0
+            )
 
 
 def test_startup_recovery_appends_one_terminal_error_and_second_start_is_idempotent(
@@ -907,7 +1319,7 @@ def test_setup_failure_moves_queued_run_to_failed_without_false_done(
         del args, kwargs
         raise RuntimeError("setup-secret-must-not-escape")
 
-    monkeypatch.setattr(runtime_module, "register_initial_product_tools", fail_setup)
+    monkeypatch.setattr(runtime_module, "ToolRegistry", fail_setup)
 
     async def scenario() -> None:
         manager = runtime_module.AgentRuntimeManager(

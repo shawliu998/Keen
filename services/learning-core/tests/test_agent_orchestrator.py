@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -10,7 +11,7 @@ from pydantic import ValidationError
 from app.agent.event_stream import AgentEventStore, DurableEventStream, encode_sse
 from app.agent.executor import AgentStepExecutor
 import app.agent.orchestrator as orchestrator_module
-from app.agent.orchestrator import AgentOrchestrator
+from app.agent.orchestrator import AgentOrchestrator, ProviderToolRuntime
 from app.agent.provider import (
     ContentDelta,
     FixedAutomationProvider,
@@ -71,6 +72,64 @@ class _Executor:
         )
 
 
+class _CreateNoteArguments(ToolArguments):
+    note_id: str
+
+
+class _CreateNoteOutput(ToolOutput):
+    entity_id: str
+    body: str
+
+
+class _CreateNoteReadTool:
+    name = "create_note"
+    description = "Read a deterministic local test note."
+    permission_level = PermissionLevel.AUTOMATIC
+    effect = ToolEffect.READ
+    arguments_model = _CreateNoteArguments
+    result_model = _CreateNoteOutput
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def execute(
+        self, arguments: _CreateNoteArguments, context: ToolContext
+    ) -> ToolResult:
+        context.raise_if_cancelled()
+        self.calls.append(arguments.note_id)
+        return ToolResult(
+            output={
+                "entity_id": arguments.note_id,
+                "body": "private note body",
+            }
+        )
+
+
+class _NoopAuditSink:
+    async def record_started(self, record):
+        del record
+
+    async def record_succeeded(self, record, *, mutations, transaction):
+        del record, mutations, transaction
+
+    async def record_rejected(self, record):
+        del record
+
+    async def record_failed(self, record):
+        del record
+
+    async def record_cancelled(self, record):
+        del record
+
+
+def _create_note_runtime() -> tuple[ProviderToolRuntime, _CreateNoteReadTool]:
+    registry = ToolRegistry()
+    tool = _CreateNoteReadTool()
+    registry.register(tool)
+    executor = AgentStepExecutor(registry, _NoopAuditSink())
+    return ProviderToolRuntime.from_readonly_registry(registry, executor), tool
+
+
 class _FeedbackDrivenProvider:
     name = "feedback-test"
     model = "feedback-driven"
@@ -79,10 +138,11 @@ class _FeedbackDrivenProvider:
     def __init__(self) -> None:
         self.feedback: list[ProviderToolResult] = []
         self.feedback_received = asyncio.Event()
+        self.request: ProviderRequest | None = None
         self.closed = False
 
     async def stream(self, request: ProviderRequest) -> AsyncIterator:
-        del request
+        self.request = request
         yield ToolCall(
             call_id="call-feedback-1",
             tool_name="create_note",
@@ -269,16 +329,20 @@ def test_real_tool_result_privately_drives_the_next_provider_turn(tmp_path):
     _create_run(database)
     provider = _FeedbackDrivenProvider()
     store = AgentEventStore(database)
+    runtime, tool = _create_note_runtime()
 
     asyncio.run(
         AgentOrchestrator(
             event_store=store,
             provider=provider,
-            executor=_Executor(),
+            tool_runtime=runtime,
         ).run("run-1")
     )
 
     assert len(provider.feedback) == 1
+    assert provider.request is not None
+    assert [tool.name for tool in provider.request.tools] == ["create_note"]
+    assert provider.request.tools[0].parameters["additionalProperties"] is False
     feedback = provider.feedback[0]
     assert feedback.call_id == "call-feedback-1"
     assert feedback.tool_name == "create_note"
@@ -289,14 +353,14 @@ def test_real_tool_result_privately_drives_the_next_provider_turn(tmp_path):
         "entity_id": "note-feedback-1",
         "body": "private note body",
     }
-    assert len(feedback.mutation_ids) == 1
+    assert feedback.mutation_ids == ()
+    assert tool.calls == ["note-feedback-1"]
     events = store.list_events("run-1")
     assert [event.event_type for event in events] == [
         "metadata",
         "status",
         "tool_start",
         "tool_result",
-        "state_mutation",
         "content_delta",
         "status",
         "done",
@@ -304,7 +368,7 @@ def test_real_tool_result_privately_drives_the_next_provider_turn(tmp_path):
     assert events[3].payload["result"]["body"] == "[REDACTED]"
     serialized_events = "\n".join(encode_sse(event) for event in events)
     assert "private note body" not in serialized_events
-    assert events[5].payload == {"delta": "Created note-feedback-1."}
+    assert events[4].payload == {"delta": "Created note-feedback-1."}
     assert provider.closed is True
 
 
@@ -312,14 +376,14 @@ def test_two_sequential_tool_calls_receive_correlated_feedback_once(tmp_path):
     database = _database(tmp_path)
     _create_run(database)
     provider = _TwoRoundFeedbackProvider()
-    executor = _Executor()
     store = AgentEventStore(database)
+    runtime, tool = _create_note_runtime()
 
     asyncio.run(
         AgentOrchestrator(
             event_store=store,
             provider=provider,
-            executor=executor,
+            tool_runtime=runtime,
         ).run("run-1")
     )
 
@@ -331,7 +395,7 @@ def test_two_sequential_tool_calls_receive_correlated_feedback_once(tmp_path):
         "note-round-1",
         "note-round-2",
     ]
-    assert len(executor.calls) == 2
+    assert tool.calls == ["note-round-1", "note-round-2"]
     events = store.list_events("run-1")
     assert [event.event_type for event in events].count("tool_result") == 2
     assert events[-1].event_type == "done"
@@ -341,6 +405,33 @@ def test_tool_call_without_feedback_capability_fails_before_execution(tmp_path):
     database = _database(tmp_path)
     _create_run(database)
     provider = _NoFeedbackProvider()
+    executor = _Executor()
+    store = AgentEventStore(database)
+    runtime, tool = _create_note_runtime()
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store,
+            provider=provider,
+            tool_runtime=runtime,
+        ).run("run-1")
+    )
+
+    assert executor.calls == []
+    assert tool.calls == []
+    assert store.get_run("run-1")["status"] == "failed"
+    assert store.get_run("run-1")["error_code"] == "provider_protocol_error"
+    assert not any(
+        event.event_type in {"tool_start", "tool_result", "done"}
+        for event in store.list_events("run-1")
+    )
+    assert provider.closed is True
+
+
+def test_nonfixture_provider_without_policy_is_deny_by_default(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    provider = _FeedbackDrivenProvider()
     executor = _Executor()
     store = AgentEventStore(database)
 
@@ -353,13 +444,51 @@ def test_tool_call_without_feedback_capability_fails_before_execution(tmp_path):
     )
 
     assert executor.calls == []
+    assert provider.feedback == []
     assert store.get_run("run-1")["status"] == "failed"
     assert store.get_run("run-1")["error_code"] == "provider_protocol_error"
     assert not any(
         event.event_type in {"tool_start", "tool_result", "done"}
         for event in store.list_events("run-1")
     )
-    assert provider.closed is True
+
+
+def test_executor_and_bound_runtime_cannot_be_combined(tmp_path):
+    database = _database(tmp_path)
+    runtime, _ = _create_note_runtime()
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        AgentOrchestrator(
+            event_store=AgentEventStore(database),
+            provider=_FeedbackDrivenProvider(),
+            executor=_Executor(),
+            tool_runtime=runtime,
+        )
+
+
+def test_orchestrator_rejects_provider_runtime_subclasses(tmp_path):
+    database = _database(tmp_path)
+
+    class _RuntimeSubclass(ProviderToolRuntime):
+        @property
+        def executor(self):
+            return _Executor()
+
+        @property
+        def catalog(self):
+            return ()
+
+        @property
+        def allowed_tool_names(self):
+            return frozenset({"create_note"})
+
+    forged = object.__new__(_RuntimeSubclass)
+    with pytest.raises(ValueError, match="exact trusted type"):
+        AgentOrchestrator(
+            event_store=AgentEventStore(database),
+            provider=_FeedbackDrivenProvider(),
+            tool_runtime=forged,
+        )
 
 
 def test_tool_round_limit_is_cumulative_and_stops_before_next_execution(
@@ -414,10 +543,11 @@ def test_cancel_during_feedback_is_bounded_and_remains_cancelled(
             raises_after_cancel=raises_after_cancel
         )
         store = AgentEventStore(database)
+        runtime, _ = _create_note_runtime()
         orchestrator = AgentOrchestrator(
             event_store=store,
             provider=provider,
-            executor=_Executor(),
+            tool_runtime=runtime,
         )
         execution = asyncio.create_task(orchestrator.run("run-1"))
         await provider.submit_started.wait()
@@ -714,7 +844,12 @@ def test_startup_reconciles_committed_level_two_tool_before_run_interruption(tmp
         },
     )
     registry = ToolRegistry()
-    register_initial_product_tools(registry, connection_factory=database.connection)
+    register_initial_product_tools(
+        registry,
+        connection_factory=database.connection,
+        course_id="course-calculus",
+        as_of=datetime(2026, 7, 16, 10, tzinfo=UTC),
+    )
     with database.connection() as audit_connection:
         sink = SQLiteAuditSink(
             audit_connection,

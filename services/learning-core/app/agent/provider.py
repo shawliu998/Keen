@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from .catalog import ProviderToolSpec
 from .types import is_hidden_reasoning_key, validate_bounded_json_object
 
 _PROVIDER_CLOSE_TIMEOUT_SECONDS = 1.0
@@ -71,6 +72,7 @@ class ProviderRequest(BaseModel):
     user_intent: str = Field(min_length=1, max_length=5_000)
     mode: Literal["ask", "teach", "study", "review", "plan"]
     input: dict[str, object] = Field(default_factory=dict)
+    tools: tuple[ProviderToolSpec, ...] = Field(default=(), max_length=64)
 
     @field_validator("input")
     @classmethod
@@ -78,6 +80,13 @@ class ProviderRequest(BaseModel):
         validate_bounded_json_object(value)
         _reject_hidden_reasoning(value)
         return value
+
+    @model_validator(mode="after")
+    def validate_unique_tool_names(self) -> ProviderRequest:
+        names = tuple(tool.name for tool in self.tools)
+        if len(names) != len(set(names)):
+            raise ValueError("provider tool catalog names must be unique")
+        return self
 
 
 class ContentDelta(BaseModel):

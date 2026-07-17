@@ -8,6 +8,7 @@ from .product import (
     ListStudyFeedArguments,
     ListStudyFeedTool,
     register_initial_product_tools,
+    register_readonly_product_tools,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "ListStudyFeedArguments",
     "ListStudyFeedTool",
     "register_initial_product_tools",
+    "register_readonly_product_tools",
 ]

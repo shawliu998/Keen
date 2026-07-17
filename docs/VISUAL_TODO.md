@@ -82,6 +82,13 @@ resolution are persistence-only changes. They do not add a rendered tool state,
 reference capture or visual-diff result; the Home / Agent visual row and scoped
 tool activity states therefore remain Missing.
 
+2026-07-17 structured read-tool note: the loopback provider can now execute two
+host-scoped Level 1 reads through a strict multi-round protocol, but this batch
+changes only the Python runtime and backend tests. It adds no rendered state,
+authorized reference capture, visual-diff artifact or parity measurement. The
+Home / Agent tool trace, loading/error/permission states and HyperKnow visual
+comparison therefore remain Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

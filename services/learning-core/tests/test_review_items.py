@@ -10,6 +10,7 @@ from threading import Barrier
 import pytest
 
 from app.database import Database
+from app.repositories import review_repository
 from app.repositories.review_repository import ReviewRepository
 from app.review import FSRSReviewScheduler, Rating, Schedule
 from app.review.scheduler import SCHEDULER_VERSION
@@ -115,6 +116,62 @@ def test_review_item_and_fsrs_state_are_separate_and_idempotent(tmp_path):
     assert persisted["revision"] == 1
     assert dict(mastery) == {"probability": 0.42, "attempts": 2}
     assert attempt_count == 1
+
+
+def test_list_due_applies_limit_before_decoding_rows(tmp_path, monkeypatch):
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        repository = ReviewRepository(connection)
+        first, _ = repository.create_item(
+            item_id="review-due-first",
+            course_id="course-calculus",
+            concept_id="concept-chain-rule",
+            item_type="free_recall",
+            prompt="First due item",
+            expected_answer={"required_terms": ["first"]},
+            source_type="manual",
+            source_id=None,
+            due_at="2026-07-16T08:00:00+00:00",
+            scheduler_version=SCHEDULER_VERSION,
+            idempotency_key="review-due-first-key",
+            created_at="2026-07-16T07:00:00+00:00",
+        )
+        _later, _ = repository.create_item(
+            item_id="review-due-undecoded",
+            course_id="course-calculus",
+            concept_id="concept-chain-rule",
+            item_type="free_recall",
+            prompt="Later due item",
+            expected_answer={"required_terms": ["later"]},
+            source_type="manual",
+            source_id=None,
+            due_at="2026-07-16T08:01:00+00:00",
+            scheduler_version=SCHEDULER_VERSION,
+            idempotency_key="review-due-undecoded-key",
+            created_at="2026-07-16T07:00:00+00:00",
+        )
+        decoded_ids: list[str] = []
+        original_decode_item = review_repository._decode_item
+
+        def record_decode(row: sqlite3.Row):
+            decoded_ids.append(str(row["id"]))
+            return original_decode_item(row)
+
+        monkeypatch.setattr(review_repository, "_decode_item", record_decode)
+        statements: list[str] = []
+        connection.set_trace_callback(statements.append)
+        due = repository.list_due(
+            due_at="2026-07-16T09:00:00+00:00",
+            course_id="course-calculus",
+            limit=1,
+        )
+        connection.set_trace_callback(None)
+
+    assert [item["id"] for item in due] == [first["id"]]
+    assert decoded_ids == [first["id"]]
+    assert any(
+        "ORDER BY s.due_at, i.id LIMIT 1" in statement for statement in statements
+    )
 
 
 def test_review_attempt_rejects_stale_revision_without_partial_insert(tmp_path):

@@ -202,10 +202,21 @@ class ReviewRepository:
         return _decode_item(row) if row is not None else None
 
     def list_due(
-        self, *, due_at: str, course_id: str | None = None
+        self,
+        *,
+        due_at: str,
+        course_id: str | None = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+        ):
+            raise ValueError("limit must be a positive integer")
         course_clause = " AND i.course_id = ?" if course_id else ""
-        parameters = (due_at, course_id) if course_id else (due_at,)
+        parameters: tuple[object, ...] = (due_at, course_id) if course_id else (due_at,)
+        limit_clause = " LIMIT ?" if limit is not None else ""
+        if limit is not None:
+            parameters += (limit,)
         rows = self.connection.execute(
             """
             SELECT i.*, s.difficulty, s.stability, s.due_at,
@@ -218,7 +229,8 @@ class ReviewRepository:
             WHERE i.status = 'active' AND s.due_at <= ?
             """
             + course_clause
-            + " ORDER BY s.due_at, i.id",
+            + " ORDER BY s.due_at, i.id"
+            + limit_clause,
             parameters,
         ).fetchall()
         return [_decode_item(row) for row in rows]

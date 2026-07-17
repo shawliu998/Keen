@@ -19,6 +19,18 @@ Audit commands included shallow/filtered `git clone`, `git rev-parse HEAD`, `git
 
 OATutor's `src/content-sources/oatutor` is a non-initialized git submodule pointing at gitlink `270ce04096a39b3412a8e08bc626bdce99c0f495`. Its README describes separately licensed/attributed content, but that submodule's license files and per-item attributions were not read because the submodule was not checked out. Therefore no OATutor content, hint text, problem, image, or parameter set is approved for reuse by this audit.
 
+## 2026-07-17 shawliu998 candidate audit (not incorporated)
+
+The following exact revisions were checked out only for read-only reuse review. They are **reviewed candidates / not incorporated**: Keen has added no source file, package dependency, adapter, submodule, vendored material, or distribution artifact from them. This is not a license scan, and no completed scan is claimed.
+
+| Upstream | Exact review revision | License and notice evidence | Reviewed scope and decision | Incorporation state |
+| --- | --- | --- | --- | --- |
+| `shawliu998/contextdelta` | `2e206888a37796fb08a0c0d3d0b5c99bf6f36a2c` | Root `LICENSE` read: Apache-2.0. No top-level `NOTICE` found. | Reviewed provider, schema, freshness/environment, and test areas only. Their value is limited to concepts and negative-test ideas for typed tool/state contracts; no implementation is selected. | **Reviewed candidate / not incorporated.** No source or dependency introduced. |
+| `shawliu998/spark-agent` | `f21158df7631e23f5be4481ea20e63c11e8389b1` | Root `LICENSE` read: MIT. `THIRD_PARTY_NOTICES.md` was read and contains Spark Agent's own upstream/dependency information. | Reviewed model-gateway, workflow, and SDK areas only for architecture concepts. No module, prompt, workflow, or dependency is selected for Keen. | **Reviewed candidate / not incorporated.** No source or dependency introduced. |
+| `shawliu998/Vera` | `5611699e46552a20bf42ce84396a8e65aa139d16` | Root `LICENSE` read: AGPL-3.0. | Architecture reference only. Do not copy, port, vendor, install, or distribute Vera material in Keen. | **Reviewed candidate / not incorporated.** No source or dependency introduced. |
+
+Because nothing is incorporated, this audit requires no new `THIRD_PARTY_NOTICES.md` or `docs/UPSTREAM_PATCHES.md` entry. If any future work copies, ports, vendors, adapts, or adds a dependency from one of these candidates, repeat the review at the chosen exact revision and record file-level source/destination provenance, verified notices, modifications, and applicable scanner evidence before integration.
+
 ## Live dependency follow-up
 
 Parallel implementation has since introduced `apps/desktop/package.json`, `services/learning-core/pyproject.toml`, `apps/desktop/src-tauri/Cargo.toml`, a root npm `package-lock.json`, a Rust `Cargo.lock`, and a platform-specific PEP 751 `services/learning-core/pylock.toml`. Tauri, its plugins, and the bundled sidecar have build/test evidence, but successful execution is not a completed license/NOTICE review. Generated `artifacts/license-scan/` reports are local and gitignored; only the reconciled facts written into tracked documents are durable repository evidence.

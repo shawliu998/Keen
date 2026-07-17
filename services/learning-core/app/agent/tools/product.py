@@ -21,6 +21,7 @@ from ..types import (
     ToolEffect,
     ToolOutput,
     ToolResult,
+    is_safe_identifier,
 )
 from ..transaction import SQLiteToolSession
 
@@ -35,20 +36,14 @@ def _require_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-class ListStudyFeedArguments(ToolArguments):
-    as_of: datetime
-    course_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=256,
-        pattern=SAFE_IDENTIFIER_PATTERN,
-    )
-    limit: int = Field(default=20, ge=1, le=50)
+def _require_trusted_course_id(value: str) -> str:
+    if not is_safe_identifier(value):
+        raise ValueError("course_id must be a safe identifier")
+    return value
 
-    @field_validator("as_of")
-    @classmethod
-    def validate_as_of(cls, value: datetime) -> datetime:
-        return _require_utc(value)
+
+class ListStudyFeedArguments(ToolArguments):
+    limit: int = Field(default=20, ge=1, le=50)
 
 
 class StudyFeedTaskOutput(ToolOutput):
@@ -77,13 +72,25 @@ class ListStudyFeedOutput(ToolOutput):
 
 class ListStudyFeedTool:
     name = "list_study_feed"
+    description = (
+        "List prioritized study tasks for the trusted current course "
+        "as of the fixed run time."
+    )
     permission_level = PermissionLevel.AUTOMATIC
     effect = ToolEffect.READ
     arguments_model = ListStudyFeedArguments
     result_model = ListStudyFeedOutput
 
-    def __init__(self, connection_factory: ConnectionFactory) -> None:
+    def __init__(
+        self,
+        connection_factory: ConnectionFactory,
+        *,
+        course_id: str,
+        as_of: datetime,
+    ) -> None:
         self._connection_factory = connection_factory
+        self._course_id = _require_trusted_course_id(course_id)
+        self._as_of = _require_utc(as_of)
 
     async def execute(
         self, arguments: ListStudyFeedArguments, context: ToolContext
@@ -91,8 +98,8 @@ class ListStudyFeedTool:
         context.raise_if_cancelled()
         with self._connection_factory() as connection:
             tasks = TaskRepository(connection).list_feed(
-                as_of=arguments.as_of.isoformat(),
-                course_id=arguments.course_id,
+                as_of=self._as_of.isoformat(),
+                course_id=self._course_id,
                 limit=arguments.limit,
             )
         context.raise_if_cancelled()
@@ -118,19 +125,7 @@ class ListStudyFeedTool:
 
 
 class ListDueReviewsArguments(ToolArguments):
-    due_at: datetime
-    course_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=256,
-        pattern=SAFE_IDENTIFIER_PATTERN,
-    )
     limit: int = Field(default=20, ge=1, le=50)
-
-    @field_validator("due_at")
-    @classmethod
-    def validate_due_at(cls, value: datetime) -> datetime:
-        return _require_utc(value)
 
 
 class DueReviewItemOutput(ToolOutput):
@@ -156,13 +151,24 @@ class ListDueReviewsOutput(ToolOutput):
 
 class ListDueReviewsTool:
     name = "list_due_reviews"
+    description = (
+        "List due review items for the trusted current course as of the fixed run time."
+    )
     permission_level = PermissionLevel.AUTOMATIC
     effect = ToolEffect.READ
     arguments_model = ListDueReviewsArguments
     result_model = ListDueReviewsOutput
 
-    def __init__(self, connection_factory: ConnectionFactory) -> None:
+    def __init__(
+        self,
+        connection_factory: ConnectionFactory,
+        *,
+        course_id: str,
+        due_at: datetime,
+    ) -> None:
         self._connection_factory = connection_factory
+        self._course_id = _require_trusted_course_id(course_id)
+        self._due_at = _require_utc(due_at)
 
     async def execute(
         self, arguments: ListDueReviewsArguments, context: ToolContext
@@ -170,9 +176,10 @@ class ListDueReviewsTool:
         context.raise_if_cancelled()
         with self._connection_factory() as connection:
             items = ReviewRepository(connection).list_due(
-                due_at=arguments.due_at.isoformat(),
-                course_id=arguments.course_id,
-            )[: arguments.limit]
+                due_at=self._due_at.isoformat(),
+                course_id=self._course_id,
+                limit=arguments.limit,
+            )
         context.raise_if_cancelled()
         return ToolResult(
             output={
@@ -292,10 +299,33 @@ class ExportStudyDataTool:
         raise RuntimeError("Level 3 export is unavailable in this milestone")
 
 
-def register_initial_product_tools(
-    registry: ToolRegistry, *, connection_factory: ConnectionFactory
+def register_readonly_product_tools(
+    registry: ToolRegistry,
+    *,
+    connection_factory: ConnectionFactory,
+    course_id: str,
+    as_of: datetime,
 ) -> None:
-    registry.register(ListStudyFeedTool(connection_factory))
-    registry.register(ListDueReviewsTool(connection_factory))
+    registry.register(
+        ListStudyFeedTool(connection_factory, course_id=course_id, as_of=as_of)
+    )
+    registry.register(
+        ListDueReviewsTool(connection_factory, course_id=course_id, due_at=as_of)
+    )
+
+
+def register_initial_product_tools(
+    registry: ToolRegistry,
+    *,
+    connection_factory: ConnectionFactory,
+    course_id: str,
+    as_of: datetime,
+) -> None:
+    register_readonly_product_tools(
+        registry,
+        connection_factory=connection_factory,
+        course_id=course_id,
+        as_of=as_of,
+    )
     registry.register(CompleteStudyTaskTool())
     registry.register(ExportStudyDataTool())

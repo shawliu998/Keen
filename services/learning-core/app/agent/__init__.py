@@ -7,6 +7,11 @@ from .audit import (
     ToolAuditTerminal,
     summarize_for_audit,
 )
+from .catalog import (
+    MAX_TOOL_DESCRIPTION_CHARS,
+    ProviderToolPolicy,
+    ProviderToolSpec,
+)
 from .executor import (
     AgentStepExecutor,
     ConfirmationRequiredError,
@@ -14,6 +19,7 @@ from .executor import (
     ToolPermissionError,
     TransactionFactory,
 )
+from .orchestrator import ProviderToolRuntime
 from .registry import ToolNotFoundError, ToolRegistrationError, ToolRegistry
 from .sqlite_audit import (
     InFlightInvocationError,
@@ -50,7 +56,11 @@ __all__ = [
     "ConfirmationRequiredError",
     "InFlightInvocationError",
     "LocalWriteSession",
+    "MAX_TOOL_DESCRIPTION_CHARS",
     "PermissionLevel",
+    "ProviderToolPolicy",
+    "ProviderToolRuntime",
+    "ProviderToolSpec",
     "StateMutation",
     "SQLiteAuditSink",
     "SQLiteToolResult",

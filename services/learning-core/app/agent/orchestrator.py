@@ -8,11 +8,14 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Protocol
 
 from .audit import summarize_for_audit
+from .catalog import ProviderToolPolicy, ProviderToolSpec
 from .event_stream import AgentEventStore
+from .executor import AgentStepExecutor
 from .provider import (
     AgentProvider,
     close_provider_safely,
     ContentDelta,
+    FixedAutomationProvider,
     ProviderAction,
     ProviderCheckpoint,
     ProviderDisconnectedError,
@@ -23,6 +26,7 @@ from .provider import (
     ProviderWarning,
     ToolCall,
 )
+from .registry import ToolRegistry
 from .sqlite_audit import mutation_id_for_invocation
 from .types import ToolContext, ToolReplayResult, ToolResult
 
@@ -63,6 +67,52 @@ class StepExecutor(Protocol):
     ) -> ToolResult | ToolReplayResult: ...
 
 
+class ProviderToolRuntime:
+    """One inseparable provider catalog, allowlist, and read-only executor."""
+
+    __slots__ = ("_executor", "_frozen", "_policy")
+
+    def __init__(self) -> None:
+        raise TypeError("ProviderToolRuntime must be derived from a read-only registry")
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_frozen", False):
+            raise AttributeError("provider tool runtime is immutable")
+        object.__setattr__(self, name, value)
+
+    @classmethod
+    def from_readonly_registry(
+        cls, registry: ToolRegistry, executor: AgentStepExecutor
+    ) -> ProviderToolRuntime:
+        if cls is not ProviderToolRuntime:
+            raise TypeError("provider tool runtime subclasses are not supported")
+        if type(executor) is not AgentStepExecutor or not executor.is_bound_to(
+            registry, require_non_transactional=True
+        ):
+            raise ValueError(
+                "provider tool runtime requires the same non-transactional registry executor"
+            )
+        runtime = object.__new__(cls)
+        object.__setattr__(runtime, "_executor", executor)
+        object.__setattr__(
+            runtime, "_policy", ProviderToolPolicy.from_readonly_registry(registry)
+        )
+        object.__setattr__(runtime, "_frozen", True)
+        return runtime
+
+    @property
+    def executor(self) -> AgentStepExecutor:
+        return self._executor
+
+    @property
+    def catalog(self) -> tuple[ProviderToolSpec, ...]:
+        return self._policy.catalog
+
+    @property
+    def allowed_tool_names(self) -> frozenset[str]:
+        return self._policy.allowed_tool_names
+
+
 class AgentOrchestrator:
     """One cancellable provider loop over a closed tool executor."""
 
@@ -71,13 +121,35 @@ class AgentOrchestrator:
         *,
         event_store: AgentEventStore,
         provider: AgentProvider,
-        executor: StepExecutor,
-        allowed_tool_names: frozenset[str] | None = None,
+        executor: StepExecutor | None = None,
+        tool_runtime: ProviderToolRuntime | None = None,
     ) -> None:
+        if executor is None and tool_runtime is None:
+            raise ValueError("an Agent tool executor is required")
+        if executor is not None and tool_runtime is not None:
+            raise ValueError("executor and provider tool runtime cannot be combined")
+        if tool_runtime is not None and type(tool_runtime) is not ProviderToolRuntime:
+            raise ValueError("provider tool runtime must use the exact trusted type")
         self._event_store = event_store
         self._provider = provider
-        self._executor = executor
-        self._allowed_tool_names = allowed_tool_names
+        if tool_runtime is not None:
+            self._executor = tool_runtime.executor
+            self._tool_catalog = tool_runtime.catalog
+            self._allowed_tool_names = tool_runtime.allowed_tool_names
+        elif type(provider) is FixedAutomationProvider:
+            # Exact in-process fixtures may exercise their closed executor
+            # registry in unit tests without exposing a provider catalog.
+            if executor is None:  # pragma: no cover - checked above
+                raise ValueError("an Agent tool executor is required")
+            self._executor = executor
+            self._tool_catalog = ()
+            self._allowed_tool_names = None
+        else:
+            if executor is None:  # pragma: no cover - checked above
+                raise ValueError("an Agent tool executor is required")
+            self._executor = executor
+            self._tool_catalog = ()
+            self._allowed_tool_names = frozenset()
         self._active: dict[str, asyncio.Event] = {}
         self._active_lock = asyncio.Lock()
 
@@ -109,6 +181,7 @@ class AgentOrchestrator:
                 user_intent=run["user_intent"],
                 mode=run["mode"],
                 input=run["input"],
+                tools=self._tool_catalog,
             )
             finished = False
             ordinal = 0

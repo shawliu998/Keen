@@ -63,6 +63,15 @@ class AgentStepExecutor:
         self._audit_sink = audit_sink
         self._transaction_factory = transaction_factory
 
+    def is_bound_to(
+        self, registry: ToolRegistry, *, require_non_transactional: bool = False
+    ) -> bool:
+        """Return whether this exact executor is bound to the trusted registry."""
+
+        return self._registry is registry and (
+            not require_non_transactional or self._transaction_factory is None
+        )
+
     async def execute_step(
         self,
         *,

@@ -4,11 +4,12 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Protocol
 
 from ..agent.event_stream import AgentEventStore, DurableAgentEvent, DurableEventStream
 from ..agent.executor import AgentStepExecutor
-from ..agent.orchestrator import AgentOrchestrator
+from ..agent.orchestrator import AgentOrchestrator, ProviderToolRuntime
 from ..agent.provider import (
     AgentProvider,
     FixedAutomationProvider,
@@ -17,7 +18,10 @@ from ..agent.provider import (
 from ..agent.registry import ToolRegistry
 from ..agent.scope import resolve_course_scope
 from ..agent.sqlite_audit import SQLiteAuditSink
-from ..agent.tools.product import register_initial_product_tools
+from ..agent.tools.product import (
+    register_initial_product_tools,
+    register_readonly_product_tools,
+)
 from ..database import Database
 from ..repositories import JsonValue
 from ..repositories.agent_repository import AgentRepository
@@ -37,6 +41,23 @@ class AgentProviderUnavailableError(RuntimeError):
 
 class AgentBusyError(RuntimeError):
     pass
+
+
+_FIXTURE_UNSCOPED_COURSE_ID = "automation-unscoped"
+
+
+def _parse_run_created_at(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("persisted Agent run creation time is invalid")
+    try:
+        created_at = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("persisted Agent run creation time is invalid") from error
+    if created_at.tzinfo is None or created_at.utcoffset() is None:
+        raise ValueError("persisted Agent run creation time must be UTC")
+    if created_at.utcoffset().total_seconds() != 0:
+        raise ValueError("persisted Agent run creation time must be UTC")
+    return created_at.astimezone(UTC)
 
 
 class AgentRuntimeManager:
@@ -292,6 +313,12 @@ class AgentRuntimeManager:
     async def _execute(self, run_id: str, provider: AgentProvider) -> None:
         orchestrator: AgentOrchestrator | None = None
         try:
+            run = self.get_run(run_id)
+            if run is None:  # pragma: no cover - protected by persisted task ownership
+                raise RuntimeError("Agent run disappeared before execution")
+            course_scope_id = run["course_scope_id"]
+            as_of = _parse_run_created_at(run["created_at"])
+
             # This connection is background-task-owned. It never comes from a
             # FastAPI yield dependency and remains open for the complete tool run.
             with self._database.connection() as audit_connection:
@@ -300,27 +327,38 @@ class AgentRuntimeManager:
                     reconciliation_connection_factory=self._database.connection,
                 )
                 registry = ToolRegistry()
-                register_initial_product_tools(
-                    registry, connection_factory=self._database.connection
-                )
-                executor = AgentStepExecutor(
-                    registry,
-                    sink,
-                    transaction_factory=sink.transaction,
-                )
+                if type(provider) is FixedAutomationProvider:
+                    register_initial_product_tools(
+                        registry,
+                        connection_factory=self._database.connection,
+                        course_id=course_scope_id or _FIXTURE_UNSCOPED_COURSE_ID,
+                        as_of=as_of,
+                    )
+                    executor = AgentStepExecutor(
+                        registry,
+                        sink,
+                        transaction_factory=sink.transaction,
+                    )
+                    tool_runtime = None
+                else:
+                    if course_scope_id is not None:
+                        register_readonly_product_tools(
+                            registry,
+                            connection_factory=self._database.connection,
+                            course_id=course_scope_id,
+                            as_of=as_of,
+                        )
+                    executor = AgentStepExecutor(registry, sink)
+                    tool_runtime = (
+                        ProviderToolRuntime.from_readonly_registry(registry, executor)
+                        if registry.tools
+                        else None
+                    )
                 orchestrator = AgentOrchestrator(
                     event_store=self._event_store,
                     provider=provider,
-                    executor=executor,
-                    # The fixed provider is an in-process test fixture and may
-                    # exercise the complete registry. No configured production
-                    # provider receives tools until it declares a separately
-                    # reviewed, run-scoped allowlist.
-                    allowed_tool_names=(
-                        frozenset(registry)
-                        if isinstance(provider, FixedAutomationProvider)
-                        else frozenset()
-                    ),
+                    executor=executor if tool_runtime is None else None,
+                    tool_runtime=tool_runtime,
                 )
                 async with self._lock:
                     if self._active_run_id == run_id:
