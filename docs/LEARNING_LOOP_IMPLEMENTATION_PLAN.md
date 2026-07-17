@@ -537,6 +537,21 @@ one existing Starlette warning; Ruff lint/format passed all 123 files. This is
 scope persistence only: LocalChat is still text-only, runtime production tools
 remain denied, and trusted host argument injection/read-only execution are open.
 
+The subsequent production-tool slices bind that persisted scope and fixed run
+time into one immutable read-only runtime, expose Study Feed, due Review and
+lexical course-knowledge search to configured loopback OpenAI-compatible/Ollama
+providers, and keep Level 2/3 absent. Safe argument-validation and explicitly
+classified SQLite BUSY/LOCKED failures now produce only closed, bounded private
+`tool_error` feedback after the failed step and redacted public lifecycle event
+commit atomically. Cancellation, permission, contract/protocol and uncertain
+audit failures remain terminal. A real Ollama API run proves invalid search
+arguments can be corrected with a new call ID, retrieve current-course data and
+produce a final answer without public source/path/SQL/exception leakage or any
+mutation. Full validation passed Python 797/797, desktop 178/178 plus
+lint/typecheck/build, Ruff lint/format, compileall and `git diff --check`. This
+does not implement approval execution, hybrid Agent retrieval, packaged GUI
+lifecycle E2E or the remaining learning-loop gates.
+
 ### Gate 4 — durable Conversation and Deep Learn
 
 Status: **not started**.

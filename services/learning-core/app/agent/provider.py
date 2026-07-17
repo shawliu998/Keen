@@ -203,6 +203,59 @@ class ProviderToolResult(BaseModel):
         return self
 
 
+class ProviderToolError(BaseModel):
+    """Private, bounded recovery feedback for one safe read-only tool failure.
+
+    The orchestrator deliberately constructs this from a closed set of host
+    classifications.  It contains no exception text or tool input/output, so it
+    can be sent back to a provider without disclosing local implementation data.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    call_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
+    tool_name: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z][a-z0-9_]{0,79}$",
+    )
+    invocation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
+    trust: Literal["untrusted_tool_data"] = "untrusted_tool_data"
+    kind: Literal["tool_error"] = "tool_error"
+    code: Literal[
+        "invalid_arguments",
+        "temporary_read_failure",
+    ]
+    category: Literal["validation", "temporary"]
+    retryable: bool
+    recovery_action: Literal["correct_arguments", "retry_or_use_another_tool"]
+
+    @model_validator(mode="after")
+    def validate_safe_recovery(self) -> ProviderToolError:
+        expected = {
+            "invalid_arguments": ("validation", True, "correct_arguments"),
+            "temporary_read_failure": (
+                "temporary",
+                True,
+                "retry_or_use_another_tool",
+            ),
+        }[self.code]
+        if (self.category, self.retryable, self.recovery_action) != expected:
+            raise ValueError("provider tool error recovery fields are inconsistent")
+        return self
+
+
+ProviderToolFeedback: TypeAlias = ProviderToolResult | ProviderToolError
+
+
 ProviderAction: TypeAlias = Annotated[
     ContentDelta | ToolCall | ProviderCheckpoint | ProviderWarning | ProviderFinished,
     Field(discriminator="kind"),
@@ -228,7 +281,7 @@ class AgentProvider(Protocol):
 
 @runtime_checkable
 class ToolFeedbackProvider(Protocol):
-    async def submit_tool_result(self, result: ProviderToolResult) -> None: ...
+    async def submit_tool_result(self, result: ProviderToolFeedback) -> None: ...
 
 
 class FixedAutomationProvider:
@@ -244,11 +297,11 @@ class FixedAutomationProvider:
         self._actions = tuple(
             _PROVIDER_ACTION_ADAPTER.validate_python(action) for action in actions
         )
-        self._tool_results: tuple[ProviderToolResult, ...] = ()
+        self._tool_results: tuple[ProviderToolFeedback, ...] = ()
         self.closed = False
 
     @property
-    def tool_results(self) -> tuple[ProviderToolResult, ...]:
+    def tool_results(self) -> tuple[ProviderToolFeedback, ...]:
         return self._tool_results
 
     async def stream(self, request: ProviderRequest) -> AsyncIterator[ProviderAction]:
@@ -257,7 +310,7 @@ class FixedAutomationProvider:
             await asyncio.sleep(0)
             yield action
 
-    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+    async def submit_tool_result(self, result: ProviderToolFeedback) -> None:
         if len(self._tool_results) >= 1_000:
             raise ValueError("automation tool result sequence is too large")
         self._tool_results = (*self._tool_results, result)
@@ -285,6 +338,8 @@ __all__ = [
     "ProviderFinished",
     "ProviderOutputError",
     "ProviderRequest",
+    "ProviderToolError",
+    "ProviderToolFeedback",
     "ProviderToolResult",
     "ProviderWarning",
     "ToolFeedbackProvider",

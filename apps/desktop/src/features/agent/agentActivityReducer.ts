@@ -63,18 +63,19 @@ function updateToolResult(
   tools: readonly AgentToolActivity[],
   event: Extract<AgentRunEvent, { type: "tool_result" }>,
 ): readonly AgentToolActivity[] {
+  const status = "failed" in event.data ? "failed" as const : "completed" as const;
   const index = tools.findIndex((tool) => tool.invocationId === event.data.invocationId);
   if (index === -1) {
     return boundedAppend(tools, {
       invocationId: event.data.invocationId,
       toolName: event.data.toolName,
-      status: "completed",
+      status,
       replayed: event.data.replayed,
     });
   }
   return tools.map((tool, toolIndex) => toolIndex === index ? {
     ...tool,
-    status: "completed" as const,
+    status,
     replayed: event.data.replayed,
   } : tool);
 }
@@ -111,6 +112,15 @@ function statusFromEvent(event: AgentRunEvent): AgentRunStatus | null {
   return null;
 }
 
+function settleRunningTools(
+  tools: readonly AgentToolActivity[],
+  status: AgentRunStatus,
+): readonly AgentToolActivity[] {
+  if (!isTerminal(status)) return tools;
+  const toolStatus = status === "cancelled" ? "cancelled" as const : "stopped" as const;
+  return tools.map((tool) => tool.status === "running" ? { ...tool, status: toolStatus } : tool);
+}
+
 export function agentActivityReducer(state: AgentActivityState, action: AgentActivityAction): AgentActivityState {
   if (action.type === "reset") return initialAgentActivityState;
   if (action.type === "run_status") {
@@ -120,6 +130,7 @@ export function agentActivityReducer(state: AgentActivityState, action: AgentAct
       durableStatus: action.status,
       terminal: isTerminal(action.status),
       partial: false,
+      tools: settleRunningTools(state.tools, action.status),
     };
   }
   if (action.type === "stream_disconnected") {
@@ -141,6 +152,7 @@ export function agentActivityReducer(state: AgentActivityState, action: AgentAct
     partial: false,
     lastEventId: event.id,
     receivedEventIds: boundedAppend(state.receivedEventIds, event.id, MAX_TRACKED_EVENT_IDS),
+    tools: durableStatus === null ? state.tools : settleRunningTools(state.tools, durableStatus),
   };
 
   switch (event.type) {

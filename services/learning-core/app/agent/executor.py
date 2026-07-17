@@ -43,6 +43,22 @@ class ToolContractError(RuntimeError):
     pass
 
 
+class ToolArgumentValidationError(ValueError):
+    """Provider arguments did not satisfy a registered tool's input model."""
+
+
+class RecoverableReadToolError(RuntimeError):
+    """An explicitly classified, side-effect-free temporary read failure.
+
+    Tools may raise this only after deciding that retrying or choosing another
+    read tool is safe.  It intentionally carries no provider-facing detail.
+    """
+
+
+class ToolAuditUncertainError(RuntimeError):
+    """A terminal audit write failed after a tool failure."""
+
+
 class AgentStepExecutor:
     """Execute one provider-neutral tool step without retaining model reasoning.
 
@@ -82,7 +98,10 @@ class AgentStepExecutor:
         context: ToolContext,
     ) -> ToolResult | ToolReplayResult:
         tool = self._registry.get(tool_name)
-        validated = self._registry.validate_arguments(tool_name, arguments)
+        try:
+            validated = self._registry.validate_arguments(tool_name, arguments)
+        except ValidationError as error:
+            raise ToolArgumentValidationError("tool arguments are invalid") from error
         context.raise_if_cancelled()
         reservation = await self._audit_sink.record_started(
             ToolAuditStart(
@@ -162,6 +181,10 @@ class AgentStepExecutor:
                 )
             except Exception:
                 error.add_note("The terminal tool audit could not be recorded")
+                if isinstance(error, RecoverableReadToolError):
+                    raise ToolAuditUncertainError(
+                        "terminal tool audit state is uncertain"
+                    ) from None
             raise
 
     async def _execute_level_two(

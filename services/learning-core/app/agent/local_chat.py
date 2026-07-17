@@ -22,7 +22,8 @@ from .provider import (
     ProviderFinished,
     ProviderOutputError,
     ProviderRequest,
-    ProviderToolResult,
+    ProviderToolError,
+    ProviderToolFeedback,
     ToolCall,
 )
 
@@ -88,7 +89,7 @@ class LocalChatAgentProvider:
         self._active = False
         self._active_task: asyncio.Task[object] | None = None
         self._pending: ToolRound | None = None
-        self._pending_result: ProviderToolResult | None = None
+        self._pending_result: ProviderToolFeedback | None = None
         self._history: list[dict[str, object]] = []
         self._closed = False
         self._close_started = False
@@ -230,7 +231,7 @@ class LocalChatAgentProvider:
             self._pending = None
             self._pending_result = None
 
-    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+    async def submit_tool_result(self, result: ProviderToolFeedback) -> None:
         if self._closed:
             raise ValueError("local Agent provider is closed")
         pending = self._pending
@@ -338,16 +339,28 @@ def _close_strict_schema(value: object) -> None:
 
 
 def _tool_result_wire_message(
-    provider_name: str, result: ProviderToolResult
+    provider_name: str, result: ProviderToolFeedback
 ) -> dict[str, object]:
-    content = _canonical_json(
-        {
-            "trust": result.trust,
-            "fidelity": result.fidelity,
-            "replayed": result.replayed,
-            "output": result.output,
-        }
-    )
+    payload: dict[str, object] = {"trust": result.trust}
+    if isinstance(result, ProviderToolError):
+        payload.update(
+            {
+                "kind": result.kind,
+                "code": result.code,
+                "category": result.category,
+                "retryable": result.retryable,
+                "recovery_action": result.recovery_action,
+            }
+        )
+    else:
+        payload.update(
+            {
+                "fidelity": result.fidelity,
+                "replayed": result.replayed,
+                "output": result.output,
+            }
+        )
+    content = _canonical_json(payload)
     if provider_name == "openai-compatible":
         return {"role": "tool", "tool_call_id": result.call_id, "content": content}
     return {"role": "tool", "tool_name": result.tool_name, "content": content}

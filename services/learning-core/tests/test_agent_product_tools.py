@@ -9,6 +9,8 @@ from hashlib import sha256
 
 import pytest
 
+import app.agent.tools.product as product_module
+from app.agent.executor import RecoverableReadToolError
 from app.agent import (
     AgentStepExecutor,
     AgentTool,
@@ -46,6 +48,44 @@ def _database(tmp_path) -> Database:
     database.migrate()
     database.seed_demo()
     return database
+
+
+@pytest.mark.parametrize("message", ["database is busy", "database is locked"])
+def test_only_sqlite_busy_or_locked_is_retryable_for_course_knowledge(message: str):
+    assert product_module._is_retryable_sqlite_read_error(
+        sqlite3.OperationalError(message)
+    )
+    assert not product_module._is_retryable_sqlite_read_error(
+        sqlite3.OperationalError("disk I/O error")
+    )
+
+
+@pytest.mark.parametrize("primary_code", [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_extended_sqlite_busy_or_locked_code_is_retryable(primary_code: int):
+    error = sqlite3.OperationalError("extended SQLite read failure")
+    error.sqlite_errorcode = primary_code | (7 << 8)
+
+    assert product_module._is_retryable_sqlite_read_error(error)
+
+
+def test_course_knowledge_tool_converts_sqlite_busy_to_explicit_read_failure(
+    tmp_path, monkeypatch
+):
+    database = _database(tmp_path)
+    error = sqlite3.OperationalError("database is busy")
+    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+    def busy_search(*args, **kwargs):
+        del args, kwargs
+        raise error
+
+    monkeypatch.setattr(DocumentRepository, "search", busy_search)
+    tool = SearchCourseKnowledgeTool(database.connection, course_id="course-calculus")
+
+    with pytest.raises(RecoverableReadToolError):
+        tool._search_indexed_lexical(
+            "chain rule", limit=2, cancellation=threading.Event()
+        )
 
 
 def _unusable_connection_factory():

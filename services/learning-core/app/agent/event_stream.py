@@ -448,6 +448,50 @@ class AgentEventStore:
                 connection.rollback()
                 raise
 
+    def fail_tool_step_with_result(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        error_code: str,
+        result_payload: dict[str, object],
+    ) -> DurableAgentEvent:
+        """Atomically terminalize a recoverable failure and publish its safe result."""
+
+        self._validate_identifier(run_id, label="run ID")
+        self._validate_identifier(step_id, label="step ID")
+        safe_result = self._payload(result_payload)
+        now = datetime.now(UTC).isoformat()
+        with self._database.connection() as connection:
+            repository = AgentRepository(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE agent_steps
+                    SET status = 'failed', error_code = ?, updated_at = ?, finished_at = ?
+                    WHERE id = ? AND run_id = ? AND status IN ('pending', 'running')
+                    """,
+                    (error_code, now, now, step_id, run_id),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        "Agent tool step cannot publish a failure from its current state"
+                    )
+                row = self._append_event_once(
+                    connection=connection,
+                    repository=repository,
+                    event_id=_tool_event_id(step_id, "tool_result", 0),
+                    run_id=run_id,
+                    event_type="tool_result",
+                    payload=safe_result,
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return self._event(row)
+
     def append(
         self,
         run_id: str,

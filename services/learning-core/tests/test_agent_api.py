@@ -19,6 +19,7 @@ from app.agent.provider import (
     ProviderAction,
     ProviderFinished,
     ProviderRequest,
+    ProviderToolError,
     ProviderToolResult,
     ToolCall,
 )
@@ -569,6 +570,212 @@ def test_concrete_ollama_agent_searches_only_scoped_course_knowledge_privately(
         assert injection_marker not in stored_summary
         assert physics_marker not in stored_summary
         assert "/private/agent-e2e/" not in stored_summary
+
+
+def test_concrete_ollama_agent_recovers_from_redacted_search_argument_error(
+    tmp_path,
+):
+    local_chat = LocalChatSettings(
+        provider="ollama",
+        base_url="http://127.0.0.1:11434",
+        model="keen-local",
+        version="model-v7",
+    )
+    settings = Settings(
+        session_token=TOKEN,
+        database_path=tmp_path / "agent-api.sqlite3",
+        local_chat=local_chat,
+        seed_demo=True,
+    )
+    private_path = "/private/recoverable-agent-e2e.sqlite"
+    raw_source = "raw-source-marker-never-public"
+    raw_sql = "SELECT private_error FROM local_only"
+    responses = iter(
+        (
+            {
+                "model": "keen-local",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "search_course_knowledge",
+                                "arguments": {
+                                    "query": "chain rule",
+                                    "limit": 1,
+                                    "source": raw_source,
+                                    "path": private_path,
+                                    "sql": raw_sql,
+                                    "exception": "private-exception-marker",
+                                },
+                            }
+                        }
+                    ],
+                },
+                "done": True,
+                "done_reason": "stop",
+            },
+            {
+                "model": "keen-local",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "search_course_knowledge",
+                                "arguments": {"query": "chain rule", "limit": 1},
+                            }
+                        }
+                    ],
+                },
+                "done": True,
+                "done_reason": "stop",
+            },
+            {
+                "model": "keen-local",
+                "message": {
+                    "role": "assistant",
+                    "content": "The chain rule differentiates compositions.",
+                },
+                "done": True,
+                "done_reason": "stop",
+            },
+        )
+    )
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json=next(responses),
+        )
+
+    def chat_provider_factory(
+        configuration: LocalChatSettings,
+    ) -> OllamaChatProvider:
+        return OllamaChatProvider(
+            base_url=configuration.base_url,
+            model=configuration.model,
+            version=configuration.version,
+            transport=httpx.MockTransport(handle_request),
+        )
+
+    with TestClient(
+        create_app(settings, chat_provider_factory=chat_provider_factory)
+    ) as client:
+        with Database(settings.database_path).connection() as connection:
+            now = "2026-07-17T00:00:00+00:00"
+            content = "The chain rule differentiates compositions."
+            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            connection.execute(
+                """
+                INSERT INTO documents(
+                    id, course_id, name, mime_type, extension, status,
+                    page_count, chunk_count, error, created_at, updated_at
+                ) VALUES ('document-recoverable-agent', 'course-calculus',
+                          'Calculus notes.txt', 'text/plain', '.txt', 'indexed',
+                          1, 1, NULL, ?, ?)
+                """,
+                (now, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO document_versions(
+                    id, document_id, version_number, content_hash, storage_path,
+                    size_bytes, parser_version, page_count, created_at
+                ) VALUES ('version-recoverable-agent', 'document-recoverable-agent',
+                          1, ?, ?, ?, 'fixture-parser/1', 1, ?)
+                """,
+                (content_hash, private_path, len(content.encode("utf-8")), now),
+            )
+            connection.execute(
+                """
+                INSERT INTO course_documents(course_id, document_id, added_at)
+                VALUES ('course-calculus', 'document-recoverable-agent', ?)
+                """,
+                (now,),
+            )
+            connection.execute(
+                """
+                INSERT INTO document_chunks(
+                    id, document_id, version_id, ordinal, page_number,
+                    section_path, content, content_hash, text_location,
+                    parser_version, embedding_version, created_at
+                ) VALUES ('chunk-recoverable-agent', 'document-recoverable-agent',
+                          'version-recoverable-agent', 0, 1, '["Lecture 1"]', ?, ?,
+                          '{"privateOffset": 0}', 'fixture-parser/1', NULL, ?)
+                """,
+                (content, content_hash, now),
+            )
+            connection.commit()
+            ConversationRepository(connection).create_conversation(
+                conversation_id="conversation-recoverable-agent",
+                title="Recoverable concrete knowledge",
+                course_id="course-calculus",
+            )
+
+        created = client.post(
+            "/v1/agent/runs",
+            headers=AUTH,
+            json={
+                **_payload(key="agent-api-recoverable-search"),
+                "conversationId": "conversation-recoverable-agent",
+            },
+        )
+        assert created.status_code == 202
+        run_id = created.json()["id"]
+        assert _wait_for_terminal(client, run_id)["status"] == "completed"
+        events = _sse_events(
+            client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH).text
+        )
+
+    results = [
+        json.loads(event["data"]) for event in events if event["event"] == "tool_result"
+    ]
+    assert len(results) == 2
+    failed, succeeded = results
+    assert failed == {
+        "callId": failed["callId"],
+        "invocationId": failed["invocationId"],
+        "toolName": "search_course_knowledge",
+        "failed": True,
+        "code": "invalid_arguments",
+        "retryable": True,
+        "replayed": False,
+    }
+    assert succeeded["toolName"] == "search_course_knowledge"
+    assert succeeded["replayed"] is False
+    assert "result" in succeeded
+    assert failed["callId"] != succeeded["callId"]
+    public_stream = "\n".join(event["data"] for event in events)
+    for secret in (
+        private_path,
+        raw_source,
+        raw_sql,
+        "private-exception-marker",
+    ):
+        assert secret not in public_stream
+
+    with Database(settings.database_path).connection() as connection:
+        steps = connection.execute(
+            "SELECT status, error_code FROM agent_steps WHERE run_id = ? ORDER BY ordinal",
+            (run_id,),
+        ).fetchall()
+        invocations = connection.execute(
+            "SELECT status FROM tool_invocations WHERE run_id = ? ORDER BY created_at",
+            (run_id,),
+        ).fetchall()
+        mutation_count = connection.execute(
+            "SELECT count(*) FROM state_mutations WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+    assert [tuple(step) for step in steps] == [
+        ("failed", "invalid_arguments"),
+        ("completed", None),
+    ]
+    assert [row[0] for row in invocations] == ["succeeded"]
+    assert mutation_count == 0
 
 
 def test_explicit_agent_provider_factory_precedes_local_chat_configuration(tmp_path):
@@ -1151,8 +1358,7 @@ def test_production_read_tools_reject_provider_scope_and_time(
         )
         run_id = created.json()["id"]
         terminal = _wait_for_terminal(client, run_id)
-        assert terminal["status"] == "failed"
-        assert terminal["errorCode"] == "validation_error"
+        assert terminal["status"] == "completed"
 
     with Database(settings.database_path).connection() as connection:
         assert (
@@ -1161,7 +1367,12 @@ def test_production_read_tools_reject_provider_scope_and_time(
             ).fetchone()[0]
             == 0
         )
-    assert provider.feedback == []
+    assert len(provider.feedback) == 1
+    feedback = provider.feedback[0]
+    assert isinstance(feedback, ProviderToolError)
+    assert feedback.code == "invalid_arguments"
+    assert not set(forged_arguments) & set(feedback.model_dump(mode="json"))
+    assert str(next(iter(forged_arguments.values()))) not in str(feedback)
     assert provider.closed is True
 
 

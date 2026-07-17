@@ -15,6 +15,7 @@ from app.lexical_retrieval import detect_query_script, normalize_query
 from app.repositories.review_repository import ReviewRepository
 from app.repositories.task_repository import TaskRepository
 
+from ..executor import RecoverableReadToolError
 from ..registry import ToolRegistry
 from ..types import (
     SAFE_IDENTIFIER_PATTERN,
@@ -396,9 +397,25 @@ class SearchCourseKnowledgeTool:
             except sqlite3.OperationalError as error:
                 if cancellation.is_set():
                     raise asyncio.CancelledError from error
+                if _is_retryable_sqlite_read_error(error):
+                    raise RecoverableReadToolError(
+                        "temporary indexed read failure"
+                    ) from None
                 raise
             finally:
                 connection.set_progress_handler(None, 0)
+
+
+def _is_retryable_sqlite_read_error(error: sqlite3.OperationalError) -> bool:
+    """Accept only SQLite BUSY/LOCKED, including their extended result codes."""
+
+    error_code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(error_code, int) and error_code & 0xFF in {
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+    }:
+        return True
+    return str(error).casefold() in {"database is busy", "database is locked"}
 
 
 class CompleteStudyTaskArguments(ToolArguments):

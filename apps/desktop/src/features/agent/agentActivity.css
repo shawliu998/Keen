@@ -103,6 +103,9 @@
 .agent-activity-list li > strong { color: var(--text-primary); font-size: 10px; }
 .agent-activity-tool-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
 .agent-activity-tool-completed { background: var(--success); }
+.agent-activity-tool-failed { background: var(--danger); }
+.agent-activity-tool-cancelled,
+.agent-activity-tool-stopped { background: var(--text-tertiary); }
 
 .agent-activity-warnings { display: flex; flex-direction: column; gap: 7px; }
 .agent-activity-warnings li { padding: 9px 10px; border-radius: 8px; background: rgba(217,154,43,.08); }

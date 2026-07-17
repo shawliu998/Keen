@@ -87,6 +87,72 @@ describe("Agent activity reducer", () => {
     expect(JSON.stringify(state)).not.toContain("raw tool payload");
   });
 
+  it("marks a durable redacted failed tool result as failed", () => {
+    const state = reduce([
+      {
+        id: "tool-start-failed",
+        type: "tool_start",
+        data: { invocationId: "invocation-failed", toolName: "search_notes", replayCandidate: false },
+      },
+      {
+        id: "tool-result-failed",
+        type: "tool_result",
+        data: {
+          callId: "call-failed",
+          invocationId: "invocation-failed",
+          toolName: "search_notes",
+          failed: true,
+          code: "temporary_read_failure",
+          retryable: true,
+          replayed: false,
+        },
+      },
+    ]);
+
+    expect(state.tools).toEqual([{
+      invocationId: "invocation-failed",
+      toolName: "search_notes",
+      status: "failed",
+      replayed: false,
+    }]);
+  });
+
+  it.each([
+    ["cancelled", "cancelled"],
+    ["failed", "stopped"],
+    ["interrupted", "stopped"],
+    ["completed", "stopped"],
+  ] as const)("settles an unfinished tool when the run becomes %s", (runStatus, toolStatus) => {
+    const running = reduce([{
+      id: "tool-start-terminal",
+      type: "tool_start",
+      data: { invocationId: "invocation-terminal", toolName: "search_notes", replayCandidate: false },
+    }]);
+    const terminal = agentActivityReducer(running, {
+      type: "run_status",
+      status: runStatus,
+    });
+
+    expect(terminal.tools[0]?.status).toBe(toolStatus);
+  });
+
+  it("settles an unfinished tool from a terminal SSE event", () => {
+    const state = reduce([
+      {
+        id: "tool-start-error",
+        type: "tool_start",
+        data: { invocationId: "invocation-error", toolName: "search_notes", replayCandidate: false },
+      },
+      {
+        id: "run-error",
+        type: "error",
+        data: { code: "tool_contract_error", retryable: false, status: "failed" },
+      },
+    ]);
+
+    expect(state.tools[0]?.status).toBe("stopped");
+  });
+
   it("records mutation receipts and user-visible warnings without raw call payloads", () => {
     const state = reduce([
       {

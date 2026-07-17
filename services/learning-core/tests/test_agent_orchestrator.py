@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.event_stream import AgentEventStore, DurableEventStream, encode_sse
-from app.agent.executor import AgentStepExecutor
+from app.agent.executor import AgentStepExecutor, RecoverableReadToolError
 import app.agent.orchestrator as orchestrator_module
 from app.agent.orchestrator import AgentOrchestrator, ProviderToolRuntime
 from app.agent.provider import (
@@ -18,6 +18,8 @@ from app.agent.provider import (
     ProviderCheckpoint,
     ProviderFinished,
     ProviderRequest,
+    ProviderToolError,
+    ProviderToolFeedback,
     ProviderToolResult,
     ProviderWarning,
     ToolCall,
@@ -120,6 +122,129 @@ class _NoopAuditSink:
 
     async def record_cancelled(self, record):
         del record
+
+
+class _FailingTerminalAuditSink(_NoopAuditSink):
+    async def record_failed(self, record):
+        del record
+        raise RuntimeError("audit storage unavailable")
+
+
+class _RecoveryProvider:
+    name = "recovery-test"
+    model = "recovery-driven"
+    version = "v1"
+
+    def __init__(self, first_arguments: Mapping[str, object]) -> None:
+        self._first_arguments = first_arguments
+        self.feedback: list[ProviderToolFeedback] = []
+        self._feedback: asyncio.Queue[ProviderToolFeedback] = asyncio.Queue()
+        self.closed = False
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator:
+        del request
+        yield ToolCall(
+            call_id="call-recovery-first",
+            tool_name="create_note",
+            arguments=dict(self._first_arguments),
+        )
+        first = await self._feedback.get()
+        assert isinstance(first, ProviderToolError)
+        yield ToolCall(
+            call_id="call-recovery-corrected",
+            tool_name="create_note",
+            arguments={"note_id": "note-recovered"},
+        )
+        second = await self._feedback.get()
+        assert isinstance(second, ProviderToolResult)
+        yield ContentDelta(text="Recovered with a corrected read-only tool call.")
+        yield ProviderFinished()
+
+    async def submit_tool_result(self, result: ProviderToolFeedback) -> None:
+        self.feedback.append(result)
+        await self._feedback.put(result)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _TemporaryReadTool(_CreateNoteReadTool):
+    async def execute(
+        self, arguments: _CreateNoteArguments, context: ToolContext
+    ) -> ToolResult:
+        if not self.calls:
+            self.calls.append(arguments.note_id)
+            raise RecoverableReadToolError(
+                "temporary local read failure at /private/course.sqlite"
+            )
+        return await super().execute(arguments, context)
+
+
+class _InternalValidationFailureTool(_CreateNoteReadTool):
+    async def execute(
+        self, arguments: _CreateNoteArguments, context: ToolContext
+    ) -> ToolResult:
+        del arguments, context
+        return ToolResult(output={"body": "x" * 65_537})
+
+
+def _temporary_read_runtime() -> tuple[ProviderToolRuntime, _TemporaryReadTool]:
+    registry = ToolRegistry()
+    tool = _TemporaryReadTool()
+    registry.register(tool)
+    executor = AgentStepExecutor(registry, _NoopAuditSink())
+    return ProviderToolRuntime.from_readonly_registry(registry, executor), tool
+
+
+def _temporary_read_runtime_with_audit(
+    audit_sink,
+) -> tuple[ProviderToolRuntime, _TemporaryReadTool]:
+    registry = ToolRegistry()
+    tool = _TemporaryReadTool()
+    registry.register(tool)
+    executor = AgentStepExecutor(registry, audit_sink)
+    return ProviderToolRuntime.from_readonly_registry(registry, executor), tool
+
+
+def _internal_validation_failure_runtime() -> tuple[
+    ProviderToolRuntime, _InternalValidationFailureTool
+]:
+    registry = ToolRegistry()
+    tool = _InternalValidationFailureTool()
+    registry.register(tool)
+    executor = AgentStepExecutor(registry, _NoopAuditSink())
+    return ProviderToolRuntime.from_readonly_registry(registry, executor), tool
+
+
+class _RepeatedInvalidProvider:
+    name = "repeated-invalid"
+    model = "repeated-invalid"
+    version = "v1"
+
+    def __init__(self, count: int, *, repeat_same: bool = False) -> None:
+        self.count = count
+        self.repeat_same = repeat_same
+        self.feedback: list[ProviderToolFeedback] = []
+        self._feedback: asyncio.Queue[ProviderToolFeedback] = asyncio.Queue()
+        self.closed = False
+
+    async def stream(self, request: ProviderRequest) -> AsyncIterator:
+        del request
+        for index in range(self.count):
+            yield ToolCall(
+                call_id=f"call-invalid-{index}",
+                tool_name="create_note",
+                arguments={"note_id": 0 if self.repeat_same else index},
+            )
+            await self._feedback.get()
+        yield ProviderFinished()
+
+    async def submit_tool_result(self, result: ProviderToolFeedback) -> None:
+        self.feedback.append(result)
+        await self._feedback.put(result)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _create_note_runtime() -> tuple[ProviderToolRuntime, _CreateNoteReadTool]:
@@ -261,6 +386,277 @@ def _create_run(database: Database, *, run_id: str = "run-1") -> None:
             input_data={"question": "What is a limit?"},
             idempotency_key=run_id,
         )
+
+
+def test_validation_failure_is_redacted_then_provider_corrects_read_call(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, tool = _create_note_runtime()
+    provider = _RecoveryProvider({"note_id": 7})
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store, provider=provider, tool_runtime=runtime
+        ).run("run-1")
+    )
+
+    assert store.get_run("run-1")["status"] == "completed"
+    assert tool.calls == ["note-recovered"]
+    assert isinstance(provider.feedback[0], ProviderToolError)
+    assert provider.feedback[0].model_dump(mode="json") == {
+        "call_id": "call-recovery-first",
+        "tool_name": "create_note",
+        "invocation_id": provider.feedback[0].invocation_id,
+        "trust": "untrusted_tool_data",
+        "kind": "tool_error",
+        "code": "invalid_arguments",
+        "category": "validation",
+        "retryable": True,
+        "recovery_action": "correct_arguments",
+    }
+    events = store.list_events("run-1")
+    failed = next(event for event in events if event.event_type == "tool_result")
+    assert failed.payload == {
+        "callId": "call-recovery-first",
+        "invocationId": provider.feedback[0].invocation_id,
+        "toolName": "create_note",
+        "failed": True,
+        "code": "invalid_arguments",
+        "retryable": True,
+        "replayed": False,
+    }
+    assert "note_id" not in str(failed.payload)
+
+
+def test_temporary_read_failure_is_redacted_then_provider_corrects_call(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, tool = _temporary_read_runtime()
+    provider = _RecoveryProvider({"note_id": "note-temporary"})
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store, provider=provider, tool_runtime=runtime
+        ).run("run-1")
+    )
+
+    assert store.get_run("run-1")["status"] == "completed"
+    assert tool.calls == ["note-temporary", "note-recovered"]
+    assert isinstance(provider.feedback[0], ProviderToolError)
+    assert provider.feedback[0].code == "temporary_read_failure"
+    public_payloads = [
+        event.payload
+        for event in store.list_events("run-1")
+        if event.event_type == "tool_result"
+    ]
+    assert public_payloads[0]["code"] == "temporary_read_failure"
+    assert "/private/course.sqlite" not in str(public_payloads)
+
+
+def test_recoverable_error_budget_terminalizes_fifth_failed_step(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, tool = _create_note_runtime()
+    provider = _RepeatedInvalidProvider(5)
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store, provider=provider, tool_runtime=runtime
+        ).run("run-1")
+    )
+
+    assert store.get_run("run-1")["status"] == "failed"
+    assert store.get_run("run-1")["error_code"] == "provider_limit_error"
+    assert tool.calls == []
+    assert len(provider.feedback) == 4
+    with database.connection() as connection:
+        steps = connection.execute(
+            "SELECT status FROM agent_steps ORDER BY ordinal"
+        ).fetchall()
+    assert [row[0] for row in steps] == ["failed"] * 5
+    assert (
+        len(
+            [
+                event
+                for event in store.list_events("run-1")
+                if event.event_type == "tool_result"
+            ]
+        )
+        == 5
+    )
+
+
+def test_repeated_recoverable_failure_is_publicly_failed_but_not_retried(tmp_path):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, _tool = _create_note_runtime()
+    provider = _RepeatedInvalidProvider(2, repeat_same=True)
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store, provider=provider, tool_runtime=runtime
+        ).run("run-1")
+    )
+
+    assert store.get_run("run-1")["error_code"] == "provider_protocol_error"
+    assert len(provider.feedback) == 1
+    assert (
+        len(
+            [
+                event
+                for event in store.list_events("run-1")
+                if event.event_type == "tool_result"
+            ]
+        )
+        == 2
+    )
+    with database.connection() as connection:
+        statuses = connection.execute(
+            "SELECT status FROM agent_steps ORDER BY ordinal"
+        ).fetchall()
+    assert [row[0] for row in statuses] == ["failed", "failed"]
+
+
+def test_recoverable_read_failure_is_terminal_when_failure_audit_is_uncertain(
+    tmp_path,
+):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, _tool = _temporary_read_runtime_with_audit(_FailingTerminalAuditSink())
+    provider = _RecoveryProvider({"note_id": "note-temporary"})
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store, provider=provider, tool_runtime=runtime
+        ).run("run-1")
+    )
+
+    run = store.get_run("run-1")
+    assert run["status"] == "failed"
+    assert run["error_code"] == "tool_audit_uncertain_error"
+    assert provider.feedback == []
+    assert not any(
+        event.event_type == "tool_result" for event in store.list_events("run-1")
+    )
+
+
+def test_internal_tool_validation_failure_is_not_recoverable_as_bad_arguments(
+    tmp_path,
+):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, _tool = _internal_validation_failure_runtime()
+    provider = _RecoveryProvider({"note_id": "valid-provider-argument"})
+    store = AgentEventStore(database)
+
+    asyncio.run(
+        AgentOrchestrator(
+            event_store=store, provider=provider, tool_runtime=runtime
+        ).run("run-1")
+    )
+
+    run = store.get_run("run-1")
+    assert run["status"] == "failed"
+    assert run["error_code"] == "validation_error"
+    assert provider.feedback == []
+    assert not any(
+        event.event_type == "tool_result" for event in store.list_events("run-1")
+    )
+
+
+def test_cancellation_after_durable_failed_result_prevents_private_feedback(
+    tmp_path, monkeypatch
+):
+    database = _database(tmp_path)
+    _create_run(database)
+    runtime, _tool = _create_note_runtime()
+    provider = _RecoveryProvider({"note_id": 7})
+    store = AgentEventStore(database)
+    orchestrator = AgentOrchestrator(
+        event_store=store, provider=provider, tool_runtime=runtime
+    )
+    original_reserve = orchestrator_module._RecoverableToolErrorBudget.reserve
+
+    def reserve_and_cancel(self, *, action, code):
+        original_reserve(self, action=action, code=code)
+        orchestrator._active["run-1"].set()
+
+    monkeypatch.setattr(
+        orchestrator_module._RecoverableToolErrorBudget,
+        "reserve",
+        reserve_and_cancel,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(orchestrator.run("run-1"))
+
+    assert store.get_run("run-1")["status"] == "cancelled"
+    assert provider.feedback == []
+    failed_results = [
+        event
+        for event in store.list_events("run-1")
+        if event.event_type == "tool_result"
+    ]
+    assert len(failed_results) == 1
+    assert failed_results[0].payload["failed"] is True
+
+
+def test_failed_step_and_public_result_roll_back_together(tmp_path, monkeypatch):
+    database = _database(tmp_path)
+    _create_run(database)
+    store = AgentEventStore(database)
+    store.start_run(
+        "run-1",
+        metadata={
+            "runId": "run-1",
+            "provider": "test",
+            "model": "test",
+            "providerVersion": "test",
+        },
+    )
+    store.start_tool_step(
+        run_id="run-1",
+        step_id="step-atomic-failure",
+        ordinal=0,
+        invocation_id="invocation-atomic-failure",
+        tool_name="create_note",
+        input_data={"toolName": "create_note", "callId": "call-atomic-failure"},
+    )
+
+    def reject_event(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("event storage unavailable")
+
+    monkeypatch.setattr(store, "_append_event_once", reject_event)
+    with pytest.raises(RuntimeError, match="event storage unavailable"):
+        store.fail_tool_step_with_result(
+            run_id="run-1",
+            step_id="step-atomic-failure",
+            error_code="invalid_arguments",
+            result_payload={
+                "callId": "call-atomic-failure",
+                "invocationId": "invocation-atomic-failure",
+                "toolName": "create_note",
+                "failed": True,
+                "code": "invalid_arguments",
+                "retryable": True,
+                "replayed": False,
+            },
+        )
+
+    with database.connection() as connection:
+        status = connection.execute(
+            "SELECT status FROM agent_steps WHERE id = 'step-atomic-failure'"
+        ).fetchone()[0]
+    assert status == "running"
+    assert not any(
+        event.event_type == "tool_result" for event in store.list_events("run-1")
+    )
 
 
 def test_orchestrator_persists_ordered_public_events_and_terminal_state(tmp_path):

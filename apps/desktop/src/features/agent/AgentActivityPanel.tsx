@@ -167,7 +167,17 @@ export function AgentActivityPanel({
               <li key={tool.invocationId}>
                 <span className={`agent-activity-tool-dot agent-activity-tool-${tool.status}`} aria-hidden="true" />
                 <strong>{humanizeToolName(tool.toolName)}</strong>
-                <span>{tool.status === "running" ? "Running" : tool.replayed ? "Completed from recorded result" : "Completed"}</span>
+                <span>{tool.status === "running"
+                  ? "Running"
+                  : tool.status === "failed"
+                    ? "Failed safely; the Agent may try another approach"
+                    : tool.status === "cancelled"
+                      ? "Cancelled before completion"
+                      : tool.status === "stopped"
+                        ? "Stopped without a completed result"
+                        : tool.replayed
+                          ? "Completed from recorded result"
+                          : "Completed"}</span>
               </li>
             ))}
           </ul>

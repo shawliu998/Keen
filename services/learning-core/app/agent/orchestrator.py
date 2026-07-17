@@ -10,7 +10,11 @@ from typing import Protocol
 from .audit import summarize_for_audit
 from .catalog import ProviderToolPolicy, ProviderToolSpec
 from .event_stream import AgentEventStore
-from .executor import AgentStepExecutor
+from .executor import (
+    AgentStepExecutor,
+    RecoverableReadToolError,
+    ToolArgumentValidationError,
+)
 from .provider import (
     AgentProvider,
     close_provider_safely,
@@ -22,6 +26,8 @@ from .provider import (
     ProviderFinished,
     ProviderOutputError,
     ProviderRequest,
+    ProviderToolError,
+    ProviderToolFeedback,
     ProviderToolResult,
     ProviderWarning,
     ToolCall,
@@ -35,6 +41,8 @@ _MAX_PROVIDER_BYTES = 4 * 1024 * 1024
 _MAX_CONTENT_BYTES = 2 * 1024 * 1024
 _MAX_TOOL_ROUNDS = 16
 _MAX_TOOL_FEEDBACK_BYTES = 256 * 1024
+_MAX_RECOVERABLE_TOOL_ERRORS = 4
+_MAX_IDENTICAL_RECOVERABLE_TOOL_ERRORS = 1
 _PROVIDER_FEEDBACK_CANCEL_TIMEOUT_SECONDS = 1.0
 
 
@@ -113,6 +121,38 @@ class ProviderToolRuntime:
         return self._policy.allowed_tool_names
 
 
+class _RecoverableToolErrorBudget:
+    """Bound private recovery feedback without retaining error details."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self._fingerprints: dict[str, int] = {}
+
+    def reserve(self, *, action: ToolCall, code: str) -> None:
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "toolName": action.tool_name,
+                    "arguments": action.arguments,
+                    "code": code,
+                },
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.count >= _MAX_RECOVERABLE_TOOL_ERRORS:
+            raise ProviderLimitError("recoverable tool error limit exceeded")
+        repeated = self._fingerprints.get(fingerprint, 0)
+        if repeated >= _MAX_IDENTICAL_RECOVERABLE_TOOL_ERRORS:
+            raise ProviderProtocolError(
+                "provider repeated an unchanged recoverable tool failure"
+            )
+        self.count += 1
+        self._fingerprints[fingerprint] = repeated + 1
+
+
 class AgentOrchestrator:
     """One cancellable provider loop over a closed tool executor."""
 
@@ -189,6 +229,7 @@ class AgentOrchestrator:
             content_bytes = 0
             tool_rounds = 0
             tool_feedback_bytes = 0
+            recoverable_error_budget = _RecoverableToolErrorBudget()
             iterator = self._provider.stream(request).__aiter__()
             while not finished:
                 action = await self._next_action(iterator, cancellation)
@@ -222,6 +263,7 @@ class AgentOrchestrator:
                     ordinal=ordinal - 1,
                     action=action,
                     cancellation=cancellation,
+                    recoverable_error_budget=recoverable_error_budget,
                 )
                 if feedback is not None:
                     feedback_bytes = len(
@@ -294,7 +336,8 @@ class AgentOrchestrator:
         ordinal: int,
         action: ProviderAction,
         cancellation: asyncio.Event,
-    ) -> ProviderToolResult | None:
+        recoverable_error_budget: _RecoverableToolErrorBudget,
+    ) -> ProviderToolFeedback | None:
         cancellation_check(cancellation)
         if isinstance(action, ContentDelta):
             self._event_store.append(run_id, "content_delta", {"delta": action.text})
@@ -356,22 +399,62 @@ class AgentOrchestrator:
                     ),
                 )
             except BaseException as error:
-                with contextlib.suppress(Exception):
-                    self._event_store.finish_tool_step_error(
-                        run_id=run_id,
-                        step_id=step_id,
-                        status=(
-                            "cancelled"
-                            if isinstance(error, asyncio.CancelledError)
-                            else "failed"
-                        ),
-                        error_code=(
-                            "cancelled"
-                            if isinstance(error, asyncio.CancelledError)
-                            else _error_code(error)
-                        ),
-                    )
-                raise
+                try:
+                    cancellation_check(cancellation)
+                except asyncio.CancelledError:
+                    with contextlib.suppress(Exception):
+                        self._event_store.finish_tool_step_error(
+                            run_id=run_id,
+                            step_id=step_id,
+                            status="cancelled",
+                            error_code="cancelled",
+                        )
+                    raise
+                recoverable = _recoverable_tool_error(
+                    error,
+                    call_id=action.call_id,
+                    tool_name=action.tool_name,
+                    invocation_id=invocation_id,
+                    allowed_read_tool=(
+                        self._allowed_tool_names is not None
+                        and action.tool_name in self._allowed_tool_names
+                    ),
+                )
+                if recoverable is None:
+                    with contextlib.suppress(Exception):
+                        self._event_store.finish_tool_step_error(
+                            run_id=run_id,
+                            step_id=step_id,
+                            status=(
+                                "cancelled"
+                                if isinstance(error, asyncio.CancelledError)
+                                else "failed"
+                            ),
+                            error_code=(
+                                "cancelled"
+                                if isinstance(error, asyncio.CancelledError)
+                                else _error_code(error)
+                            ),
+                        )
+                    raise
+                # The failed step and its redacted public result become durable
+                # together before any private feedback budget decision.
+                self._event_store.fail_tool_step_with_result(
+                    run_id=run_id,
+                    step_id=step_id,
+                    error_code=recoverable.code,
+                    result_payload={
+                        "callId": action.call_id,
+                        "invocationId": invocation_id,
+                        "toolName": action.tool_name,
+                        "failed": True,
+                        "code": recoverable.code,
+                        "retryable": recoverable.retryable,
+                        "replayed": False,
+                    },
+                )
+                recoverable_error_budget.reserve(action=action, code=recoverable.code)
+                return recoverable
             if isinstance(result, ToolReplayResult):
                 result_payload = {
                     "callId": action.call_id,
@@ -445,7 +528,7 @@ class AgentOrchestrator:
 
     async def _submit_tool_result(
         self,
-        feedback: ProviderToolResult,
+        feedback: ProviderToolFeedback,
         cancellation: asyncio.Event,
     ) -> None:
         submit_tool_result = getattr(self._provider, "submit_tool_result", None)
@@ -525,6 +608,47 @@ def _error_code(error: Exception) -> str:
         for character in name
     ).lstrip("_")
     return code[:80] or "agent_error"
+
+
+def _recoverable_tool_error(
+    error: BaseException,
+    *,
+    call_id: str,
+    tool_name: str,
+    invocation_id: str,
+    allowed_read_tool: bool,
+) -> ProviderToolError | None:
+    """Classify only safe post-call Level 1 failures for private recovery."""
+
+    if not allowed_read_tool or isinstance(error, asyncio.CancelledError):
+        return None
+    # Permission failures are never eligible, even if a caller accidentally
+    # supplies a Level 2/3 executor.
+    if isinstance(error, PermissionError):
+        return None
+    if isinstance(error, ToolArgumentValidationError):
+        code = "invalid_arguments"
+    elif isinstance(error, RecoverableReadToolError):
+        code = "temporary_read_failure"
+    else:
+        return None
+    fields = {
+        "invalid_arguments": ("validation", True, "correct_arguments"),
+        "temporary_read_failure": (
+            "temporary",
+            True,
+            "retry_or_use_another_tool",
+        ),
+    }[code]
+    return ProviderToolError(
+        call_id=call_id,
+        tool_name=tool_name,
+        invocation_id=invocation_id,
+        code=code,
+        category=fields[0],
+        retryable=fields[1],
+        recovery_action=fields[2],
+    )
 
 
 class ProviderLimitError(RuntimeError):

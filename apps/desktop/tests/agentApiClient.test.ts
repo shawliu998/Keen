@@ -158,6 +158,36 @@ describe("LearningCoreClient Agent run JSON contract", () => {
       data: { label: "private", data: { internalReasoning: "trace" } },
     }).success).toBe(false);
   });
+
+  it("accepts only the redacted failed tool-result contract", () => {
+    const failedResult = {
+      id: "event-tool-failed",
+      type: "tool_result",
+      data: {
+        callId: "call-failed",
+        invocationId: "invocation-failed",
+        toolName: "search_course_knowledge",
+        failed: true,
+        code: "invalid_arguments",
+        retryable: true,
+        replayed: false,
+      },
+    };
+
+    expect(agentRunEventSchema.safeParse(failedResult).success).toBe(true);
+    expect(agentRunEventSchema.safeParse({
+      ...failedResult,
+      data: { ...failedResult.data, exception: "/private/course.sqlite" },
+    }).success).toBe(false);
+    expect(agentRunEventSchema.safeParse({
+      ...failedResult,
+      data: { ...failedResult.data, code: "permission_denied" },
+    }).success).toBe(false);
+    expect(agentRunEventSchema.safeParse({
+      ...failedResult,
+      data: { ...failedResult.data, retryable: false },
+    }).success).toBe(false);
+  });
 });
 
 describe("LearningCoreClient Agent mutation action contract", () => {

@@ -132,6 +132,8 @@ The values supplied in the brief—such as `#F6F8FA` app background, 248 px Side
 
 A current-image run has completed, but comparison cannot run without an authorized reference. `missing_reference` is a blocker state, not a pass.
 
+The 2026-07-17 recoverable-read slice adds a red recoverable-failure dot, grey cancelled/stopped dots, and explicit lifecycle copy. Its event/schema/reducer/panel behavior is tested, but no new screenshot or authorized visual diff was captured; spacing, color and copy remain provisional visual work rather than parity evidence.
+
 | Date | Reference ID | Route/state | Viewport | Seed | Mismatch | Artifact paths | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-07-15 | Missing | `/?demo=true&visualTest=true` | 1440×920 @1x | Deterministic frontend seed | Not computed | `artifacts/visual-diff/current/home.png`, `artifacts/visual-diff/report.json` | `missing_reference`; no parity claim |

@@ -5,7 +5,7 @@ export type AgentActivityStatus = AgentRunStatus | "idle" | "partial";
 export type AgentToolActivity = {
   invocationId: string;
   toolName: string;
-  status: "running" | "completed";
+  status: "running" | "completed" | "failed" | "cancelled" | "stopped";
   replayed: boolean;
 };
 

@@ -96,6 +96,25 @@ describe("AgentActivityPanel", () => {
     expect(screen.queryByText(/SECRET/)).not.toBeInTheDocument();
   });
 
+  it("renders terminalized tool attempts without claiming they are still running", () => {
+    renderPanel({
+      runId: "run-1",
+      state: state({
+        status: "failed",
+        durableStatus: "failed",
+        terminal: true,
+        tools: [
+          { invocationId: "call-cancelled", toolName: "search_library", status: "cancelled", replayed: false },
+          { invocationId: "call-stopped", toolName: "list_due_reviews", status: "stopped", replayed: false },
+        ],
+      }),
+    });
+
+    expect(screen.getByText("Cancelled before completion")).toBeInTheDocument();
+    expect(screen.getByText("Stopped without a completed result")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+  });
+
   it("offers Undo and Redo only for reversible study-task mutations", async () => {
     const user = userEvent.setup();
     const onUndo = vi.fn();

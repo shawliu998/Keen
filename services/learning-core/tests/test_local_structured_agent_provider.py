@@ -16,6 +16,7 @@ from app.agent.provider import (
     ProviderFinished,
     ProviderOutputError,
     ProviderRequest,
+    ProviderToolError,
     ProviderToolResult,
     ToolCall,
 )
@@ -65,6 +66,18 @@ def _feedback(
         replayed=False,
         output=output or {"private": "tool-only-value", "items": ["limits"]},
         mutation_ids=(),
+    )
+
+
+def _error_feedback(*, call_id: str = "call_due_1") -> ProviderToolError:
+    return ProviderToolError(
+        call_id=call_id,
+        tool_name="list_due_reviews",
+        invocation_id="invocation-error-1",
+        code="invalid_arguments",
+        category="validation",
+        retryable=True,
+        recovery_action="correct_arguments",
     )
 
 
@@ -269,6 +282,52 @@ def test_ollama_two_round_tool_feedback_and_final_text() -> None:
     assert second_messages[-1]["role"] == "tool"
     assert second_messages[-1]["tool_name"] == "list_due_reviews"
     assert "tool_call_id" not in second_messages[-1]
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "model_name", "responses"),
+    [
+        (
+            "openai-compatible",
+            "keen-openai",
+            [_openai_tool_response(), _openai_text_response()],
+        ),
+        ("ollama", "keen-ollama", [_ollama_tool_response(), _ollama_text_response()]),
+    ],
+)
+def test_private_tool_error_uses_canonical_tool_json_and_continues(
+    provider_name: str, model_name: str, responses: Sequence[dict[str, object]]
+) -> None:
+    chat = _StructuredProvider(provider_name, model_name, responses)
+    provider = LocalChatAgentProvider(chat)  # type: ignore[arg-type]
+
+    async def run() -> list[object]:
+        iterator = provider.stream(_request()).__aiter__()
+        first = await anext(iterator)
+        assert isinstance(first, ToolCall)
+        await provider.submit_tool_result(_error_feedback(call_id=first.call_id))
+        return [first, *[action async for action in iterator]]
+
+    actions = asyncio.run(run())
+    assert [type(action) for action in actions] == [
+        ToolCall,
+        ContentDelta,
+        ProviderFinished,
+    ]
+    message = chat.bodies[1]["messages"][-1]
+    assert message["role"] == "tool"
+    if provider_name == "openai-compatible":
+        assert message["tool_call_id"] == "call_due_1"
+    else:
+        assert message["tool_name"] == "list_due_reviews"
+    assert json.loads(message["content"]) == {
+        "trust": "untrusted_tool_data",
+        "kind": "tool_error",
+        "code": "invalid_arguments",
+        "category": "validation",
+        "retryable": True,
+        "recovery_action": "correct_arguments",
+    }
 
 
 @pytest.mark.parametrize("violation", ["unknown", "parallel", "finish"])
