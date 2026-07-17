@@ -144,7 +144,7 @@ def test_migration_005_rebuilds_existing_chunks_and_triggers_stay_in_sync(
             chunks=(("chunk-before-005", "叶绿体负责进行光合作用。"),),
         )
 
-    assert database.migrate() == list(range(5, 24))
+    assert database.migrate() == list(range(5, 25))
     with database.connection() as connection:
         rebuilt = search_lexical(connection, "叶绿体光合作用", course_id=None, limit=5)
         connection.execute(

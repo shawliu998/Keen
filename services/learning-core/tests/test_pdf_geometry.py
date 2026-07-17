@@ -249,7 +249,7 @@ def test_geometry_migration_is_forward_only_and_restart_idempotent(tmp_path) -> 
             )
         connection.commit()
 
-    assert database.migrate() == list(range(8, 24))
+    assert database.migrate() == list(range(8, 25))
     assert Database(database.path).migrate() == []
     with database.connection() as connection:
         columns = {

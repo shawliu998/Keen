@@ -415,6 +415,7 @@ class StudyRepository:
         kind: str,
         prompt: str,
         unit_id: str | None = None,
+        created_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         if kind not in {
@@ -425,7 +426,7 @@ class StudyRepository:
             "reflection",
         }:
             raise ValueError("invalid checkpoint kind")
-        now = _now()
+        now = created_at or _now()
         with write_scope(self.connection, commit=commit):
             self.connection.execute(
                 """

@@ -56,13 +56,14 @@ class AssessmentRepository:
         purpose: str,
         items: list[AssessmentItemInput],
         session_id: str | None = None,
+        created_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         if purpose not in {"diagnostic", "checkpoint", "practice", "quiz", "review"}:
             raise ValueError("invalid assessment purpose")
         if not items:
             raise ValueError("assessment requires at least one item")
-        now = _now()
+        now = created_at or _now()
         with write_scope(self.connection, commit=commit):
             self.connection.execute(
                 """
@@ -131,9 +132,10 @@ class AssessmentRepository:
         assessment_id: str,
         *,
         expected_revision: int,
+        published_at: str | None = None,
         commit: bool = True,
     ) -> dict:
-        now = _now()
+        now = published_at or _now()
         with write_scope(self.connection, commit=commit):
             assessment = self.connection.execute(
                 "SELECT course_id FROM assessments WHERE id = ?", (assessment_id,)
@@ -202,12 +204,13 @@ class AssessmentRepository:
         idempotency_key: str,
         confidence: float | None = None,
         session_id: str | None = None,
+        started_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         if confidence is not None and not 0 <= confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
         serialized_answer = dump_json(answer)
-        now = _now()
+        now = started_at or _now()
         with write_scope(self.connection, commit=commit):
             existing = self.connection.execute(
                 "SELECT * FROM assessment_attempts WHERE assessment_id = ? AND idempotency_key = ?",
@@ -338,6 +341,7 @@ class AssessmentRepository:
         evaluation_source: str,
         feedback: str,
         grader_version: str,
+        graded_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         if correctness not in {"correct", "incorrect", "partial"}:
@@ -348,7 +352,7 @@ class AssessmentRepository:
             raise ValueError("invalid score or independence")
         if not isinstance(rubric_breakdown, dict):
             raise ValueError("rubric breakdown must be an object")
-        now = _now()
+        now = graded_at or _now()
         with write_scope(self.connection, commit=commit):
             existing_evaluation = self.connection.execute(
                 "SELECT * FROM answer_evaluations WHERE id = ?", (evaluation_id,)
