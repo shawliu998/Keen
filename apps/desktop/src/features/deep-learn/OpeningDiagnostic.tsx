@@ -184,9 +184,11 @@ export function OpeningDiagnostic({
   const retryingBegin = retryIntent?.kind === "begin";
 
   if (loading) return <Card className="checkpoint" role="status"><LoaderCircle className="spin" size={18} /><p>Restoring your local opening diagnostic…</p></Card>;
-  if (paused) return <Card className="checkpoint" role="status"><Badge tone="warning">Session paused</Badge><h3>Opening diagnostic restored</h3><p>{answered ? "Its self-report was not scored and did not change mastery." : "No diagnostic action was sent while this session is paused."} Resume this local session before starting or answering the opening diagnostic.</p></Card>;
-  if (answered) return <>{children}</>;
   if (notice && !diagnostic) return <Card className="checkpoint" role="alert"><strong>Opening diagnostic unavailable</strong><p>{notice.text}</p><Button onClick={() => { setLoading(true); setNotice(null); void restore(scope); }}>Retry diagnostic restore</Button></Card>;
+  // A completed diagnostic must not block restoration of a later, paused learning state.
+  if (paused && answered) return <>{children}</>;
+  if (paused) return <Card className="checkpoint" role="status"><Badge tone="warning">Session paused</Badge><h3>Opening diagnostic restored</h3><p>No diagnostic action was sent while this session is paused. Resume this local session before starting or answering the opening diagnostic.</p></Card>;
+  if (answered) return <>{children}</>;
   if (pending && diagnostic?.checkpoint) return <Card className="checkpoint" aria-labelledby="opening-diagnostic-title">
     <Badge tone="accent">Opening diagnostic</Badge>
     <h3 id="opening-diagnostic-title">{diagnostic.checkpoint.prompt}</h3>

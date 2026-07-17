@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpenText, Check, ChevronLeft, ChevronRight, Lightbulb, Pause, Play, Save, X } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -7,6 +7,7 @@ import { LearningCoreResponseError, type AutonomousStudyPlan } from "@keen/api-c
 import { useAppStore } from "../../state/appStore";
 import { isLearningCoreStarting, useLearningCore } from "../../services/LearningCoreProvider";
 import { OpeningDiagnostic } from "./OpeningDiagnostic";
+import { ActiveRecall } from "./ActiveRecall";
 
 const demoUnits = ["Goal & baseline", "Geometric intuition", "The eigenvalue equation", "Eigenspaces", "Checkpoint", "Targeted practice", "Summary"];
 
@@ -34,6 +35,14 @@ function unitProgress(plan: AutonomousStudyPlan): number {
   return plan.units.length === 0 ? 0 : (plan.units.filter((unit) => unit.status === "completed" || unit.status === "skipped").length / plan.units.length) * 100;
 }
 
+function RecallInspectorProtection() {
+  const { setInspector } = useAppStore();
+  useLayoutEffect(() => {
+    setInspector({ eyebrow: "Active recall", title: "Source details hidden", body: "Source details stay hidden while you answer this prompt." });
+  }, [setInspector]);
+  return null;
+}
+
 export function DeepLearnPage() {
   const { id: sessionId } = useParams();
   const [search] = useSearchParams();
@@ -53,6 +62,9 @@ export function DeepLearnPage() {
     refetchOnWindowFocus: false,
   });
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
+  const [activeRecallState, setActiveRecallState] = useState<{ scope: string; outcome: "not_started" | "pending" | "answered" | "cancelled" | null } | null>(null);
+  const activeRecallScope = `${core.connectionGeneration}:${sessionId ?? ""}:${courseId ?? ""}`;
+  const onActiveRecallOutcome = useCallback((scope: string, outcome: "not_started" | "pending" | "answered" | "cancelled" | null) => setActiveRecallState({ scope, outcome }), []);
   const unit = useMemo(() => {
     if (!query.data?.plan) return null;
     return query.data.plan.units.find((item) => item.id === selectedUnitId)
@@ -74,13 +86,27 @@ export function DeepLearnPage() {
   if (query.data.outcome === "plan_unavailable") return <div className="deep-learn-page"><Card><EmptyState icon={<BookOpenText size={28} />} title="Study plan unavailable" description={query.data.recovery_action ?? "Return to the Learning Feed and start a source-grounded task."} action={<Button onClick={() => navigate("/feed")}>Return to Learning Feed</Button>} /></Card></div>;
   const { session, plan } = query.data;
   if (!plan || !unit) return <div className="deep-learn-page"><Card><EmptyState icon={<BookOpenText size={28} />} title="Study plan unavailable" description="Return to the Learning Feed and refresh the local recommendation." /></Card></div>;
+  const activeRecallClientPresent = core.client !== null && typeof core.client.getStudySessionActiveRecall === "function";
+  const activeRecallOutcome = activeRecallState?.scope === activeRecallScope ? activeRecallState.outcome : null;
   const needsOpeningDiagnostic = session.status === "goal_confirmation" || session.status === "diagnosing" || session.status === "paused";
+  const activeRecallAvailable = activeRecallClientPresent && session.status !== "goal_confirmation" && session.status !== "diagnosing";
+  // Until the active-recall read has confirmed not_started, do not place lesson text,
+  // unit labels, concepts, or citations beside a prompt that might contain a cloze.
+  const recallLocksLesson = activeRecallAvailable && activeRecallOutcome !== "not_started";
+  const protectedHeader = needsOpeningDiagnostic
+    ? session.status === "paused"
+      ? { eyebrow: "Paused local session", title: "Learning state paused", description: "Keen is restoring the latest local learning state." }
+      : { eyebrow: "Local reflection", title: "Opening diagnostic", description: "Complete the current reflection before viewing lesson details." }
+    : recallLocksLesson
+      ? { eyebrow: "Local assessment", title: "Active recall", description: "Answer the current prompt without lesson details." }
+      : null;
   const lesson = <><div className="lesson-kicker">Unit {unit.ordinal + 1} · {unit.status}</div><h2>{unit.title}</h2><p className="lesson-lead">{unit.objective}</p><Card className="checkpoint"><Badge tone="accent">Source-grounded material</Badge><p>{unit.content || "This unit has no display text; use the cited source chunks in the inspector."}</p></Card><div className="lesson-nav"><Button onClick={() => setInspector({ eyebrow: "Source citations", title: unit.title, body: "The following persisted source chunk IDs ground this unit. Source text is displayed as data, not as instructions.", meta: unit.source_chunk_ids.map((source) => `Chunk ${source}`) })}><BookOpenText size={14} />View source citations</Button></div></>;
+  const activeRecall = activeRecallAvailable && core.client ? <>{recallLocksLesson ? <RecallInspectorProtection /> : lesson}<ActiveRecall key={`${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} stateScope={activeRecallScope} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }} onOutcomeChange={onActiveRecallOutcome} /></> : lesson;
   return <div className="deep-learn-page">
-    <header className="session-header"><div><span>Persisted local study session</span><h1>{session.title}</h1><p>{session.goal}</p></div><div className="session-progress"><span>{Math.round(session.progress * 100)}% session progress · {Math.round(unitProgress(plan))}% units complete</span><Progress value={session.progress * 100} /></div><div><Badge>{session.status.replaceAll("_", " ")}</Badge></div></header>
-    <div className="session-layout"><aside className="unit-nav"><small>Source-grounded plan</small>{needsOpeningDiagnostic ? <p className="diagnostic-nav-lock" role="status">Complete or restore the opening diagnostic before viewing units.</p> : plan.units.map((item) => <button key={item.id} className={item.id === unit.id ? "active" : item.status === "completed" ? "done" : ""} onClick={() => setSelectedUnitId(item.id)}><i>{item.status === "completed" ? <Check size={12} /> : item.ordinal + 1}</i><span>{item.title}</span></button>)}</aside>
-      <main className="lesson-content">{needsOpeningDiagnostic && core.client ? <OpeningDiagnostic key={`${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }}>{lesson}</OpeningDiagnostic> : lesson}</main>
-      {needsOpeningDiagnostic ? <aside className="session-aside"><small>Opening diagnostic</small><strong>Local recovery state</strong><p>Keen is restoring the first learning state before showing unit details.</p></aside> : <aside className="session-aside"><small>Local session</small><strong>{session.mode}</strong><p>{session.estimated_minutes} minute estimate</p><hr /><small>Plan rationale</small><p>{plan.rationale}</p><small>Concept IDs</small>{unit.concept_ids.map((concept) => <Badge key={concept}>{concept}</Badge>)}</aside>}
+    <header className="session-header"><div><span>{protectedHeader?.eyebrow ?? "Persisted local study session"}</span><h1>{protectedHeader?.title ?? session.title}</h1><p>{protectedHeader?.description ?? session.goal}</p></div><div className="session-progress"><span>{Math.round(session.progress * 100)}% session progress · {Math.round(unitProgress(plan))}% units complete</span><Progress value={session.progress * 100} /></div><div><Badge>{session.status.replaceAll("_", " ")}</Badge></div></header>
+    <div className="session-layout"><aside className="unit-nav"><small>Source-grounded plan</small>{needsOpeningDiagnostic ? <p className="diagnostic-nav-lock" role="status">{session.status === "paused" ? "Paused local session. Restoring the latest local learning state before showing details." : "Complete or restore the opening diagnostic before viewing units."}</p> : recallLocksLesson ? <p className="diagnostic-nav-lock" role="status">Active recall is in progress. Unit details stay hidden until this prompt is resolved.</p> : plan.units.map((item) => <button key={item.id} className={item.id === unit.id ? "active" : item.status === "completed" ? "done" : ""} onClick={() => setSelectedUnitId(item.id)}><i>{item.status === "completed" ? <Check size={12} /> : item.ordinal + 1}</i><span>{item.title}</span></button>)}</aside>
+      <main className="lesson-content">{needsOpeningDiagnostic && core.client ? <OpeningDiagnostic key={`${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }}>{activeRecall}</OpeningDiagnostic> : activeRecall}</main>
+      {needsOpeningDiagnostic ? <aside className="session-aside"><small>{session.status === "paused" ? "Paused local session" : "Opening diagnostic"}</small><strong>Local recovery state</strong><p>{session.status === "paused" ? "Keen is restoring the latest local learning state before showing details." : "Keen is restoring the first learning state before showing unit details."}</p></aside> : recallLocksLesson ? <aside className="session-aside"><small>Active recall</small><strong>Prompt protected</strong><p>Source details and concept labels are hidden while you answer.</p></aside> : <aside className="session-aside"><small>Local session</small><strong>{session.mode}</strong><p>{session.estimated_minutes} minute estimate</p><hr /><small>Plan rationale</small><p>{plan.rationale}</p><small>Concept IDs</small>{unit.concept_ids.map((concept) => <Badge key={concept}>{concept}</Badge>)}</aside>}
     </div>
   </div>;
 }

@@ -616,6 +616,213 @@ export const diagnosticProgressionResponseSchema = z.object({
   }
 });
 
+/**
+ * Learner-safe active-recall contract.  It deliberately omits source content,
+ * submitted answers, assessment internals, and idempotency metadata.
+ */
+export const activeRecallProgressionRequestSchema = z.object({
+  course_id: learningIdentifierSchema,
+  expected_revision: z.number().int().nonnegative(),
+  idempotency_key: z.string().min(16).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+}).strict();
+
+export const activeRecallAnswerRequestSchema = activeRecallProgressionRequestSchema.extend({
+  response: z.string().min(1).max(8_000).refine((value) => value.trim().length > 0, {
+    message: "Active-recall responses must contain non-whitespace text.",
+  }),
+}).strict();
+
+export const activeRecallSessionSchema = z.object({
+  id: learningIdentifierSchema,
+  course_id: learningIdentifierSchema,
+  status: z.enum([
+    "draft", "goal_confirmation", "diagnosing", "planning", "studying", "checkpoint", "active_recall",
+    "practicing", "summarizing", "review_scheduling", "paused", "completed", "cancelled", "failed",
+  ]),
+  revision: z.number().int().nonnegative(),
+  progress: finiteNumberSchema.min(0).max(1),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  current_unit_id: learningIdentifierSchema.nullable(),
+  created_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
+  started_at: isoDateTimeSchema.nullable(),
+  finished_at: isoDateTimeSchema.nullable(),
+}).strict();
+
+export const activeRecallPlanUnitSchema = z.object({
+  id: z.string().min(1).max(256),
+  ordinal: z.number().int().min(0).max(7),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  status: z.enum(["locked", "ready", "active", "completed", "skipped"]),
+  created_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
+}).strict();
+
+export const activeRecallPlanSchema = z.object({
+  id: learningIdentifierSchema,
+  session_id: learningIdentifierSchema,
+  version: z.number().int().min(1),
+  units: z.array(activeRecallPlanUnitSchema).min(2).max(8),
+}).strict();
+
+export const activeRecallCheckpointSchema = z.object({
+  id: learningIdentifierSchema,
+  kind: z.literal("active_recall"),
+  prompt: z.string().min(1).max(1_400),
+  status: z.enum(["pending", "answered", "skipped"]),
+  created_at: isoDateTimeSchema,
+  answered_at: isoDateTimeSchema.nullable(),
+}).strict();
+
+export const activeRecallRunSchema = z.object({
+  id: learningIdentifierSchema,
+  status: z.enum(["pending", "answered", "cancelled"]),
+  checkpoint_id: learningIdentifierSchema,
+  generator_version: z.string().min(1).max(128),
+  created_at: isoDateTimeSchema,
+  answered_at: isoDateTimeSchema.nullable(),
+  cancelled_at: isoDateTimeSchema.nullable(),
+  cancellation_reason: z.enum(["session_cancelled", "session_failed"]).nullable(),
+}).strict();
+
+export const activeRecallGradeSchema = z.object({
+  correct: z.boolean(),
+  score: finiteNumberSchema.min(0).max(1),
+  max_score: finiteNumberSchema.gt(0).max(1),
+  grader_version: z.string().min(1).max(128),
+}).strict();
+
+type ActiveRecallState = {
+  course_id: string;
+  session: z.infer<typeof activeRecallSessionSchema>;
+  plan: z.infer<typeof activeRecallPlanSchema>;
+  checkpoint: z.infer<typeof activeRecallCheckpointSchema> | null;
+  current_unit: z.infer<typeof activeRecallPlanUnitSchema> | null;
+  run: z.infer<typeof activeRecallRunSchema> | null;
+  grade: z.infer<typeof activeRecallGradeSchema> | null;
+};
+
+function timestampIsAfter(left: string, right: string): boolean {
+  return Date.parse(left) > Date.parse(right);
+}
+
+function verifyActiveRecallState(result: ActiveRecallState, context: z.RefinementCtx): void {
+  if (result.session.course_id !== result.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall session must belong to the response course.", path: ["session", "course_id"] });
+  }
+  if (result.plan.session_id !== result.session.id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall plan must belong to the response session.", path: ["plan", "session_id"] });
+  }
+  const units = result.plan.units;
+  if (new Set(units.map((unit) => unit.id)).size !== units.length || units.some((unit, index) => unit.ordinal !== index)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall plan units must have unique contiguous ordinals.", path: ["plan", "units"] });
+  }
+  const currentUnitId = result.current_unit === null ? null : result.current_unit.id;
+  if (currentUnitId !== result.session.current_unit_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall current unit must match the session pointer.", path: ["current_unit"] });
+  }
+  if (result.current_unit !== null) {
+    const planUnit = units.find((unit) => unit.id === result.current_unit?.id);
+    if (planUnit === undefined || !sameValidatedValue(planUnit, result.current_unit)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall current unit must exactly match a plan unit.", path: ["current_unit"] });
+    }
+  }
+  if (timestampIsAfter(result.session.created_at, result.session.updated_at)
+    || (result.session.started_at !== null && timestampIsAfter(result.session.created_at, result.session.started_at))
+    || (result.session.finished_at !== null && timestampIsAfter(result.session.created_at, result.session.finished_at))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall session timestamps are inconsistent.", path: ["session"] });
+  }
+  for (const [index, unit] of units.entries()) {
+    if (timestampIsAfter(unit.created_at, unit.updated_at)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall unit timestamps are inconsistent.", path: ["plan", "units", index] });
+  }
+  if (result.checkpoint !== null) {
+    const answered = result.checkpoint.status === "answered";
+    if (answered !== (result.checkpoint.answered_at !== null)
+      || (result.checkpoint.answered_at !== null && timestampIsAfter(result.checkpoint.created_at, result.checkpoint.answered_at))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall checkpoint metadata is inconsistent.", path: ["checkpoint"] });
+    }
+  }
+  if (result.run !== null) {
+    const terminalValid = result.run.status === "pending"
+      ? result.run.answered_at === null && result.run.cancelled_at === null && result.run.cancellation_reason === null
+      : result.run.status === "answered"
+        ? result.run.answered_at !== null && result.run.cancelled_at === null && result.run.cancellation_reason === null
+        : result.run.answered_at === null && result.run.cancelled_at !== null && result.run.cancellation_reason !== null;
+    if (!terminalValid
+      || (result.run.answered_at !== null && timestampIsAfter(result.run.created_at, result.run.answered_at))
+      || (result.run.cancelled_at !== null && timestampIsAfter(result.run.created_at, result.run.cancelled_at))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall run terminal metadata is inconsistent.", path: ["run"] });
+    }
+  }
+  if (result.grade !== null && (result.grade.score > result.grade.max_score || (result.grade.correct ? result.grade.score !== result.grade.max_score : result.grade.score !== 0))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall grade must represent deterministic exact scoring.", path: ["grade"] });
+  }
+}
+
+function verifyActiveRecallOutcome(
+  result: ActiveRecallState & { outcome: "not_started" | "pending" | "answered" | "cancelled" },
+  context: z.RefinementCtx,
+): void {
+  verifyActiveRecallState(result, context);
+  const statusMatchesOutcome = (result.session.status === "paused" && result.outcome !== "cancelled")
+    || (result.outcome === "not_started" && result.session.status === "studying")
+    || (result.outcome === "pending" && result.session.status === "active_recall")
+    || (result.outcome === "answered" && [
+      "studying", "checkpoint", "active_recall", "practicing", "summarizing",
+      "review_scheduling", "completed", "cancelled", "failed",
+    ].includes(result.session.status))
+    || (result.outcome === "cancelled" && ["cancelled", "failed"].includes(result.session.status));
+  if (!statusMatchesOutcome) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Active-recall outcome is outside the session phase.",
+      path: ["session", "status"],
+    });
+  }
+  if (result.outcome === "not_started" && (result.checkpoint !== null || result.run !== null || result.grade !== null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A not-started active-recall result cannot include run data." });
+  }
+  if (result.outcome !== "not_started") {
+    if (result.checkpoint === null || result.run === null || result.run.checkpoint_id !== result.checkpoint.id) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall run and checkpoint must match." });
+      return;
+    }
+    const valid = result.outcome === "pending"
+      ? result.run.status === "pending" && result.checkpoint.status === "pending" && result.grade === null
+      : result.outcome === "answered"
+        ? result.run.status === "answered" && result.checkpoint.status === "answered" && result.grade !== null
+        : result.run.status === "cancelled" && result.checkpoint.status === "skipped" && result.grade === null;
+    if (!valid) context.addIssue({ code: z.ZodIssueCode.custom, message: "Active-recall outcome does not match its checkpoint, run, and grade." });
+  }
+}
+
+const activeRecallReadStateFields = {
+  course_id: learningIdentifierSchema,
+  session: activeRecallSessionSchema,
+  plan: activeRecallPlanSchema,
+  checkpoint: activeRecallCheckpointSchema.nullable(),
+  current_unit: activeRecallPlanUnitSchema.nullable(),
+  run: activeRecallRunSchema.nullable(),
+  grade: activeRecallGradeSchema.nullable(),
+};
+
+export const activeRecallReadResponseSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("not_started"), ...activeRecallReadStateFields }).strict(),
+  z.object({ outcome: z.literal("pending"), ...activeRecallReadStateFields }).strict(),
+  z.object({ outcome: z.literal("answered"), ...activeRecallReadStateFields }).strict(),
+  z.object({ outcome: z.literal("cancelled"), ...activeRecallReadStateFields }).strict(),
+]).superRefine(verifyActiveRecallOutcome);
+
+export const activeRecallProgressionResponseSchema = z.object({
+  outcome: z.enum(["applied", "replayed"]),
+  ...activeRecallReadStateFields,
+  checkpoint: activeRecallCheckpointSchema,
+  run: activeRecallRunSchema,
+}).strict().superRefine((result, context) => {
+  const outcome = result.run.status === "pending" ? "pending" : result.run.status === "answered" ? "answered" : "cancelled";
+  verifyActiveRecallOutcome({ ...result, outcome }, context);
+});
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -923,6 +1130,16 @@ export type DiagnosticAnswerRequest = z.input<typeof diagnosticAnswerRequestSche
 export type DiagnosticCheckpoint = z.infer<typeof diagnosticCheckpointSchema>;
 export type DiagnosticReadResponse = z.infer<typeof diagnosticReadResponseSchema>;
 export type DiagnosticProgressionResponse = z.infer<typeof diagnosticProgressionResponseSchema>;
+export type ActiveRecallProgressionRequest = z.input<typeof activeRecallProgressionRequestSchema>;
+export type ActiveRecallAnswerRequest = z.input<typeof activeRecallAnswerRequestSchema>;
+export type ActiveRecallSession = z.infer<typeof activeRecallSessionSchema>;
+export type ActiveRecallPlanUnit = z.infer<typeof activeRecallPlanUnitSchema>;
+export type ActiveRecallPlan = z.infer<typeof activeRecallPlanSchema>;
+export type ActiveRecallCheckpoint = z.infer<typeof activeRecallCheckpointSchema>;
+export type ActiveRecallRun = z.infer<typeof activeRecallRunSchema>;
+export type ActiveRecallGrade = z.infer<typeof activeRecallGradeSchema>;
+export type ActiveRecallReadResponse = z.infer<typeof activeRecallReadResponseSchema>;
+export type ActiveRecallProgressionResponse = z.infer<typeof activeRecallProgressionResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

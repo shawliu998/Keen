@@ -25,6 +25,10 @@ import {
   autonomousRecommendationResponseSchema,
   autonomousStudySessionRequestSchema,
   autonomousStudySessionStartResponseSchema,
+  activeRecallAnswerRequestSchema,
+  activeRecallProgressionRequestSchema,
+  activeRecallProgressionResponseSchema,
+  activeRecallReadResponseSchema,
   courseCreateRequestSchema,
   courseCreateResponseSchema,
   diagnosticAnswerRequestSchema,
@@ -56,6 +60,10 @@ import {
   type AutonomousRecommendationResponse,
   type AutonomousStudySessionRequest,
   type AutonomousStudySessionStartResponse,
+  type ActiveRecallAnswerRequest,
+  type ActiveRecallProgressionRequest,
+  type ActiveRecallProgressionResponse,
+  type ActiveRecallReadResponse,
   type DocumentImportResponse,
   type DocumentCourseLinkResponse,
   type GroundedQueryResponse,
@@ -555,6 +563,89 @@ export class LearningCoreClient {
           && result.course_id === parsed.data.course_id
           && result.session.id === sessionId
           && result.checkpoint.id === checkpointId
+        ),
+      },
+    );
+  }
+
+  getStudySessionActiveRecall(
+    sessionId: string,
+    courseId: string,
+    options: RequestOptions = {},
+  ): Promise<ActiveRecallReadResponse> {
+    const path = "/v1/study-sessions/{session_id}/active-recall";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(courseId, path);
+    const params = new URLSearchParams({ course_id: courseId });
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/active-recall?${params.toString()}`,
+      activeRecallReadResponseSchema,
+      options,
+      { expectedStatuses: [200], validate: (_status, result) => result.course_id === courseId && result.session.id === sessionId },
+    );
+  }
+
+  beginStudySessionActiveRecall(
+    sessionId: string,
+    request: ActiveRecallProgressionRequest,
+    options: RequestOptions = {},
+  ): Promise<ActiveRecallProgressionResponse> {
+    const path = "/v1/study-sessions/{session_id}/active-recall";
+    assertAgentIdentifier(sessionId, path);
+    const parsed = activeRecallProgressionRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/active-recall`,
+      activeRecallProgressionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200, 201],
+        validate: (status, result) => (
+          (status === 201) === (result.outcome === "applied")
+          && result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+          && (result.outcome !== "applied" || (
+            result.run.status === "pending"
+            && result.session.status === "active_recall"
+          ))
+        ),
+      },
+    );
+  }
+
+  answerStudySessionActiveRecall(
+    sessionId: string,
+    runId: string,
+    request: ActiveRecallAnswerRequest,
+    options: RequestOptions = {},
+  ): Promise<ActiveRecallProgressionResponse> {
+    const path = "/v1/study-sessions/{session_id}/active-recall/{run_id}/answer";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(runId, path);
+    const parsed = activeRecallAnswerRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/active-recall/${encodeURIComponent(runId)}/answer`,
+      activeRecallProgressionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200],
+        validate: (_status, result) => (
+          result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+          && result.run.id === runId
+          && result.run.status === "answered"
+          && (result.outcome !== "applied" || result.session.status === "practicing")
         ),
       },
     );

@@ -223,14 +223,14 @@ describe("DeepLearnPage persisted session reader", () => {
     expect(getStudySessionDiagnostic).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps paused diagnostic restoration ahead of locked source material", async () => {
+  it("allows the completed diagnostic to yield to the next restored learning state", async () => {
     const paused = { ...studyingSession, status: "paused" as const };
     const getStudySession = vi.fn(async () => ({ outcome: "ready" as const, course_id: "course-1", session: paused, plan, current_unit_id: "unit-1", recovery_action: null }));
     const getStudySessionDiagnostic = vi.fn(async () => ({ ...answeredDiagnostic, session: paused }));
     renderOpeningDiagnostic({ getStudySession, getStudySessionDiagnostic, beginStudySessionDiagnostic: vi.fn(), answerStudySessionDiagnostic: vi.fn() });
-    expect(await screen.findByText("Opening diagnostic restored")).toBeInTheDocument();
-    expect(screen.getByText("Complete or restore the opening diagnostic before viewing units.")).toBeInTheDocument();
-    expect(screen.queryByText("Source display text.")).not.toBeInTheDocument();
+    expect(await screen.findByText("Source display text.")).toBeInTheDocument();
+    expect(screen.getByText("Paused local session. Restoring the latest local learning state before showing details.")).toBeInTheDocument();
+    expect(screen.queryByText("Opening diagnostic restored")).not.toBeInTheDocument();
   });
 
   it("does not expose a diagnostic answer form while its pending session is paused", async () => {
