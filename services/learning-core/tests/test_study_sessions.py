@@ -136,6 +136,63 @@ def test_session_plan_is_versioned_and_json_is_validated(repository):
         )
 
 
+def test_repository_selects_latest_plan_or_plan_containing_current_unit(repository):
+    repo, _ = repository
+    session = _create(repo, session_id="session-plan-selection")
+
+    def units(prefix: str):
+        return [
+            {
+                "id": f"{prefix}-unit-1",
+                "title": "Limits",
+                "objective": "Explain a limit",
+                "estimated_minutes": 15,
+                "concept_id": "concept-limits",
+                "concept_ids": ["concept-limits"],
+                "source_chunk_ids": ["chunk"],
+                "status": "ready",
+            },
+            {
+                "id": f"{prefix}-unit-2",
+                "title": "Apply limits",
+                "objective": "Solve a limit",
+                "estimated_minutes": 15,
+                "concept_id": "concept-limits",
+                "concept_ids": ["concept-limits"],
+                "source_chunk_ids": ["chunk"],
+            },
+        ]
+
+    repo.save_plan(
+        plan_id="selection-plan-1",
+        session_id=session["id"],
+        version=1,
+        rationale="Initial plan",
+        units=units("selection-v1"),
+    )
+    repo.save_plan(
+        plan_id="selection-plan-2",
+        session_id=session["id"],
+        version=2,
+        rationale="Latest plan",
+        units=units("selection-v2"),
+    )
+    assert repo.get_current_or_latest_plan(session["id"])["id"] == "selection-plan-2"
+
+    repo.transition_session(
+        session["id"],
+        status="goal_confirmation",
+        expected_revision=0,
+        current_unit_id="selection-v1-unit-1",
+    )
+    current = repo.get_current_or_latest_plan(session["id"])
+    assert current["id"] == "selection-plan-1"
+    assert [unit["id"] for unit in current["units"]] == [
+        "selection-v1-unit-1",
+        "selection-v1-unit-2",
+    ]
+
+
 def test_session_transition_revision_pause_resume_and_recovery(repository):
     repo, _ = repository
     session = _create(repo)

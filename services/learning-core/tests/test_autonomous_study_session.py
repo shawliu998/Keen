@@ -4,10 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier
 
+import pytest
+
 from app.database import Database
 from app.repositories.study_repository import StudyRepository
 from app.repositories.task_repository import TaskRepository
 from app.services.autonomous_study_session import AutonomousStudySessionService
+from app.services.study_session_read import StudySessionReadService
 
 
 NOW = datetime(2026, 7, 17, 9, 0, tzinfo=UTC)
@@ -153,6 +156,170 @@ def test_autonomous_task_creates_two_cited_source_units_and_replays(tmp_path) ->
     assert replay.outcome == "resumed"
     assert replay.session is not None
     assert replay.session["id"] == session_id
+
+
+def test_study_session_read_service_restores_persisted_plan_after_reopen(
+    tmp_path,
+) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        session_id = str(created.session["id"])
+
+    with database.connection() as reopened:
+        restored = StudySessionReadService(reopened).get(
+            course_id="course-calculus", session_id=session_id
+        )
+        outside = StudySessionReadService(reopened).get(
+            course_id="course-physics", session_id=session_id
+        )
+
+    assert restored is not None
+    assert restored.outcome == "ready"
+    assert restored.session["id"] == session_id
+    assert restored.plan is not None
+    assert restored.plan["session_id"] == session_id
+    assert len(restored.plan["units"]) == 2
+    assert outside is None
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "originating_task_missing",
+        "originating_task_cross_course",
+        "foreign_current_unit",
+        "unit_count_invalid",
+        "ordinal_invalid",
+        "primary_concept_not_in_concept_ids",
+        "concept_json_malformed",
+        "concept_json_duplicate",
+        "concept_json_empty",
+        "source_json_malformed",
+        "source_json_duplicate",
+        "source_json_empty",
+    ),
+)
+def test_study_session_read_service_fails_closed_for_corrupt_relationships(
+    tmp_path, corruption: str
+) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        assert created.plan is not None
+        session_id = str(created.session["id"])
+        plan_id = str(created.plan["id"])
+
+        if corruption == "originating_task_missing":
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute("DELETE FROM study_tasks WHERE id = 'autonomous-task'")
+            connection.commit()
+            connection.execute("PRAGMA foreign_keys = ON")
+        elif corruption == "originating_task_cross_course":
+            connection.execute(
+                "DROP TRIGGER study_tasks_originating_session_course_update"
+            )
+            connection.execute(
+                "UPDATE study_tasks SET course_id = 'course-physics' WHERE id = 'autonomous-task'"
+            )
+            connection.commit()
+        elif corruption == "foreign_current_unit":
+            repository = StudyRepository(connection)
+            foreign = repository.create_session(
+                session_id="foreign-current-session",
+                course_id="course-calculus",
+                title="Different session",
+                mode="study",
+                goal="Keep its unit outside the requested session.",
+                estimated_minutes=20,
+                created_at=NOW.isoformat(),
+            )
+            repository.save_plan(
+                plan_id="foreign-current-plan",
+                session_id=foreign["id"],
+                version=1,
+                rationale="Different session plan.",
+                units=_read_test_units("foreign-current"),
+                created_at=NOW.isoformat(),
+            )
+            connection.execute("DROP TRIGGER study_sessions_current_unit_update")
+            connection.execute(
+                "UPDATE study_sessions SET current_unit_id = 'foreign-current-unit-1' WHERE id = ?",
+                (session_id,),
+            )
+            connection.commit()
+        elif corruption == "unit_count_invalid":
+            connection.execute(
+                "DELETE FROM study_units WHERE plan_version_id = ? AND ordinal = 1",
+                (plan_id,),
+            )
+            connection.commit()
+        elif corruption == "ordinal_invalid":
+            connection.execute(
+                "UPDATE study_units SET ordinal = 3 WHERE plan_version_id = ? AND ordinal = 1",
+                (plan_id,),
+            )
+            connection.commit()
+        elif corruption == "primary_concept_not_in_concept_ids":
+            connection.execute(
+                "UPDATE study_units SET concept_ids_json = '[\"concept-limits\"]' WHERE plan_version_id = ? AND ordinal = 0",
+                (plan_id,),
+            )
+            connection.commit()
+        else:
+            column, value = {
+                "concept_json_malformed": ("concept_ids_json", "{"),
+                "concept_json_duplicate": (
+                    "concept_ids_json",
+                    '["concept-chain-rule","concept-chain-rule"]',
+                ),
+                "concept_json_empty": ("concept_ids_json", "[]"),
+                "source_json_malformed": ("source_chunk_ids_json", "{"),
+                "source_json_duplicate": (
+                    "source_chunk_ids_json",
+                    '["source-chunk-1","source-chunk-1"]',
+                ),
+                "source_json_empty": ("source_chunk_ids_json", "[]"),
+            }[corruption]
+            if value == "{":
+                connection.execute("PRAGMA ignore_check_constraints = ON")
+            connection.execute(
+                f"UPDATE study_units SET {column} = ? WHERE plan_version_id = ? AND ordinal = 0",
+                (value, plan_id),
+            )
+            connection.commit()
+
+        with pytest.raises((RuntimeError, ValueError, KeyError, TypeError)):
+            StudySessionReadService(connection).get(
+                course_id="course-calculus", session_id=session_id
+            )
+
+
+def _read_test_units(prefix: str) -> list[dict]:
+    return [
+        {
+            "id": f"{prefix}-unit-{ordinal}",
+            "title": f"Source unit {ordinal}",
+            "objective": "Read the persisted source.",
+            "content": f"Persisted source excerpt {ordinal}.",
+            "estimated_minutes": 10,
+            "concept_id": "concept-chain-rule",
+            "concept_ids": ["concept-chain-rule"],
+            "source_chunk_ids": [f"source-chunk-{ordinal}"],
+            "status": "ready" if ordinal == 1 else "locked",
+        }
+        for ordinal in (1, 2)
+    ]
 
 
 def test_concurrent_start_creates_one_session_then_resumes(tmp_path) -> None:
