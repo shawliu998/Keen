@@ -66,6 +66,197 @@ export const courseCreateResponseSchema = z.object({
   replayed: z.boolean(),
 }).strict();
 
+const finiteNumberSchema = z.number().finite();
+
+export const learningPriorityComponentSchema = z.object({
+  name: z.string().min(1).max(100),
+  raw_value: finiteNumberSchema,
+  weight: finiteNumberSchema,
+  contribution: finiteNumberSchema,
+}).strict();
+
+export const learningActionCandidateSchema = z.object({
+  id: z.string().min(1).max(256),
+  action: z.enum([
+    "review_due",
+    "resume_study_session",
+    "study_very_weak_concept",
+    "address_repeated_misconception",
+    "study_weak_concept",
+  ]),
+  target_type: z.enum(["review_item", "study_session", "concept", "misconception"]),
+  target_id: z.string().min(1).max(128),
+  concept_id: z.string().max(128).nullable(),
+  component: z.string().min(1).max(100),
+  priority_tier: z.number().int().min(1).max(10),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  fits_available_minutes: z.boolean(),
+  priority_score: finiteNumberSchema.min(0).max(1),
+  priority_unclamped_score: finiteNumberSchema,
+  priority_algorithm_version: z.string().min(1).max(100),
+  priority_components: z.array(learningPriorityComponentSchema).max(20),
+  priority_explanation: z.array(z.string()).max(20),
+  why: z.string().min(1).max(1_000),
+}).strict().superRefine((candidate, context) => {
+  const expectedTarget = candidate.action === "review_due"
+    ? "review_item"
+    : candidate.action === "resume_study_session"
+      ? "study_session"
+      : candidate.action === "address_repeated_misconception"
+        ? "misconception"
+        : "concept";
+  if (candidate.target_type !== expectedTarget) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Candidate action must match its target type.", path: ["target_type"] });
+  }
+  const conceptMatches = candidate.target_type === "study_session"
+    ? candidate.concept_id === null
+    : candidate.target_type === "concept"
+      ? candidate.concept_id === candidate.target_id
+      : candidate.concept_id !== null;
+  if (!conceptMatches) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Candidate concept must match its target semantics.", path: ["concept_id"] });
+  }
+});
+
+export const learningFeedTaskSchema = z.object({
+  id: z.string().min(1).max(128),
+  course_id: z.string().min(1).max(128),
+  concept_id: z.string().max(128).nullable(),
+  title: z.string().min(1).max(500),
+  reason: z.string().min(1).max(2_000),
+  due_at: isoDateTimeSchema,
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  status: z.enum(["upcoming", "overdue", "completed"]),
+  source_type: z.string().min(1).max(100),
+  source_id: z.string().max(128).nullable(),
+  priority_score: finiteNumberSchema.min(0),
+  recommended_reason: z.string().max(2_000),
+  scheduled_for: isoDateTimeSchema.nullable(),
+  created_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
+}).strict();
+
+function sameValidatedValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export const conceptBootstrapSchema = z.object({
+  course_id: z.string().min(1).max(128),
+  document_id: z.string().min(1).max(128),
+  concept_id: z.string().min(1).max(128),
+  concept_name: z.string().min(1).max(160),
+  mastery_probability: finiteNumberSchema.min(0).max(1),
+  mastery_attempts: z.number().int().nonnegative(),
+  concept_created: z.boolean(),
+  mastery_initialized: z.boolean(),
+  mastery_initialization_algorithm: z.string().max(100).nullable(),
+  mastery_initialization_algorithm_version: z.string().max(100).nullable(),
+}).strict();
+
+export const learningSnapshotSchema = z.object({
+  course_id: z.string().min(1).max(128),
+  as_of: isoDateTimeSchema,
+  available_minutes: z.number().int().min(1).max(1_440),
+  due_review_count: z.number().int().min(0).max(50),
+  incomplete_session_count: z.number().int().min(0).max(50),
+  misconception_count: z.number().int().min(0).max(50),
+  pending_tasks: z.array(learningFeedTaskSchema).max(50),
+  candidates: z.array(learningActionCandidateSchema).max(50),
+  mastery_gap_count: z.number().int().nonnegative(),
+}).strict().superRefine((snapshot, context) => {
+  const taskIds = new Set<string>();
+  snapshot.pending_tasks.forEach((task, index) => {
+    if (task.course_id !== snapshot.course_id) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Every pending task must belong to the snapshot course.",
+        path: ["pending_tasks", index, "course_id"],
+      });
+    }
+    if (task.status === "completed") {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Pending tasks cannot be completed.", path: ["pending_tasks", index, "status"] });
+    }
+    if (taskIds.has(task.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Pending task IDs must be unique.", path: ["pending_tasks", index, "id"] });
+    }
+    taskIds.add(task.id);
+  });
+  const candidateIds = new Set<string>();
+  snapshot.candidates.forEach((candidate, index) => {
+    if (candidateIds.has(candidate.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Candidate IDs must be unique.", path: ["candidates", index, "id"] });
+    }
+    candidateIds.add(candidate.id);
+  });
+});
+
+export const autonomousRecommendationRequestSchema = z.object({
+  course_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+  available_minutes: z.number().int().min(1).max(1_440),
+  document_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/).optional(),
+}).strict();
+
+export const autonomousRecommendationResponseSchema = z.object({
+  outcome: z.enum(["empty", "task_created", "replay", "covered_by_active_task"]),
+  course_id: z.string().min(1).max(128),
+  snapshot: learningSnapshotSchema,
+  task: learningFeedTaskSchema.nullable(),
+  candidate: learningActionCandidateSchema.nullable(),
+  bootstrap: conceptBootstrapSchema.nullable(),
+}).strict().superRefine((result, context) => {
+  if (result.course_id !== result.snapshot.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Recommendation course_id must match its snapshot.", path: ["course_id"] });
+  }
+  const shouldIncludeAction = result.outcome !== "empty";
+  if (shouldIncludeAction !== (result.task !== null) || shouldIncludeAction !== (result.candidate !== null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Only a non-empty outcome may include a task and candidate." });
+  }
+  if (result.task !== null && result.task.course_id !== result.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Recommendation task must belong to the response course.", path: ["task", "course_id"] });
+  }
+  if (result.outcome === "empty" && result.snapshot.candidates.length !== 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "An empty outcome cannot include action candidates.", path: ["outcome"] });
+  }
+  if (result.bootstrap !== null && result.bootstrap.course_id !== result.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Bootstrap evidence must belong to the response course.", path: ["bootstrap", "course_id"] });
+  }
+  if (result.candidate !== null) {
+    const snapshotCandidates = result.snapshot.candidates.filter((candidate) => candidate.id === result.candidate?.id);
+    if (snapshotCandidates.length !== 1 || !sameValidatedValue(snapshotCandidates[0], result.candidate)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Recommendation candidate must exactly match its snapshot candidate.", path: ["candidate"] });
+    }
+  }
+  if (result.task !== null) {
+    const pendingTasks = result.snapshot.pending_tasks.filter((task) => task.id === result.task?.id);
+    if (result.task.status === "completed") {
+      if (result.outcome !== "replay") {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "Only a replay may return a completed task.", path: ["task", "status"] });
+      }
+      if (pendingTasks.length > 0) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "A completed task cannot appear in pending tasks.", path: ["task", "id"] });
+      }
+    } else if (pendingTasks.length !== 1 || !sameValidatedValue(pendingTasks[0], result.task)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "An active recommendation task must exactly match its pending snapshot task.", path: ["task"] });
+    }
+  }
+  if (result.task !== null && result.candidate !== null) {
+    const task = result.task;
+    const candidate = result.candidate;
+    const covered = result.outcome === "covered_by_active_task";
+    const verifyGeneratedSource = !covered && task.status !== "completed";
+    const sourceMatches = candidate.target_type === "review_item"
+      ? task.source_type === "review" && task.source_id === candidate.target_id && task.concept_id === candidate.concept_id
+      : candidate.target_type === "study_session"
+        ? task.source_type === "study_session" && task.source_id === candidate.target_id && (!verifyGeneratedSource || task.concept_id === null)
+        : candidate.target_type === "concept"
+          ? task.concept_id === candidate.concept_id && (!verifyGeneratedSource || (task.source_type === "weak_concept" && task.source_id === candidate.concept_id))
+          : task.concept_id === candidate.concept_id && (!verifyGeneratedSource || (task.source_type === "weak_concept" && task.source_id === candidate.concept_id));
+    if (!sourceMatches) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Recommendation task source must match the candidate target.", path: ["task", "source_type"] });
+    }
+  }
+});
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -354,6 +545,13 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type Course = z.infer<typeof courseSchema>;
 export type CourseCreateRequest = z.input<typeof courseCreateRequestSchema>;
 export type CourseCreateResponse = z.infer<typeof courseCreateResponseSchema>;
+export type LearningPriorityComponent = z.infer<typeof learningPriorityComponentSchema>;
+export type LearningActionCandidate = z.infer<typeof learningActionCandidateSchema>;
+export type LearningFeedTask = z.infer<typeof learningFeedTaskSchema>;
+export type ConceptBootstrap = z.infer<typeof conceptBootstrapSchema>;
+export type LearningSnapshot = z.infer<typeof learningSnapshotSchema>;
+export type AutonomousRecommendationRequest = z.input<typeof autonomousRecommendationRequestSchema>;
+export type AutonomousRecommendationResponse = z.infer<typeof autonomousRecommendationResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

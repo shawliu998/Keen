@@ -172,6 +172,174 @@ describe("LearningCoreClient security boundary", () => {
     await expect(semanticClient.createCourse({ title: "Calculus", description: "Limits", idempotencyKey: "course-0123456789abcdef" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
   });
 
+  it("uses strict persisted-learning snapshot and recommendation contracts", async () => {
+    const candidate = {
+      id: "concept:concept-1:study_very_weak_concept",
+      action: "study_very_weak_concept",
+      target_type: "concept",
+      target_id: "concept-1",
+      concept_id: "concept-1",
+      component: "mastery",
+      priority_tier: 3,
+      estimated_minutes: 15,
+      fits_available_minutes: true,
+      priority_score: 0.8,
+      priority_unclamped_score: 0.8,
+      priority_algorithm_version: "keen-feed-priority/v1",
+      priority_components: [{ name: "mastery", raw_value: 0.2, weight: 1, contribution: 0.8 }],
+      priority_explanation: ["Weak mastery is prioritized."],
+      why: "Mastery is 20%, at or below the very-weak threshold of 35%.",
+    } as const;
+    const task = {
+      id: "recommendation-1",
+      course_id: "course-1",
+      concept_id: "concept-1",
+      title: "Study very weak concept: Limits",
+      reason: candidate.why,
+      due_at: "2026-07-17T23:59:59+00:00",
+      estimated_minutes: 15,
+      status: "upcoming",
+      source_type: "weak_concept",
+      source_id: "concept-1",
+      priority_score: 0.8,
+      recommended_reason: candidate.why,
+      scheduled_for: "2026-07-17T00:00:00+00:00",
+      created_at: "2026-07-17T10:00:00+00:00",
+      updated_at: "2026-07-17T10:00:00+00:00",
+    } as const;
+    const snapshot = {
+      course_id: "course-1",
+      as_of: "2026-07-17T10:00:00+00:00",
+      available_minutes: 20,
+      due_review_count: 0,
+      incomplete_session_count: 0,
+      misconception_count: 0,
+      pending_tasks: [task],
+      candidates: [candidate],
+      mastery_gap_count: 0,
+    } as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(snapshot))
+      .mockResolvedValueOnce(jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap: null }, 201));
+    const controller = new AbortController();
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    await expect(client.learningSnapshot({ courseId: "course-1", availableMinutes: 20 }, { signal: controller.signal })).resolves.toEqual(snapshot);
+    await expect(client.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).resolves.toMatchObject({ outcome: "task_created", task, candidate });
+    const [snapshotUrl, snapshotInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [recommendationUrl, recommendationInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(snapshotUrl).toBe("http://127.0.0.1:8080/v1/learning-snapshot?course_id=course-1&available_minutes=20");
+    expect(snapshotInit.signal).toBe(controller.signal);
+    expect(recommendationUrl).toBe("http://127.0.0.1:8080/v1/autonomous-recommendations");
+    expect(JSON.parse(String(recommendationInit.body))).toEqual({ course_id: "course-1", available_minutes: 20 });
+
+    const mismatchedStatus = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap: null }, 200)) as unknown as typeof fetch);
+    await expect(mismatchedStatus.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const completedTask = { ...task, status: "completed" as const };
+    const replaySnapshot = { ...snapshot, pending_tasks: [] };
+    const replayClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "replay", course_id: "course-1", snapshot: replaySnapshot, task: completedTask, candidate, bootstrap: null })) as unknown as typeof fetch);
+    await expect(replayClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).resolves.toMatchObject({ outcome: "replay", task: completedTask, snapshot: replaySnapshot });
+
+    const crossCourseSnapshot = { ...snapshot, pending_tasks: [{ ...task, course_id: "course-2" }] };
+    const crossCourseSnapshotClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(crossCourseSnapshot)) as unknown as typeof fetch);
+    await expect(crossCourseSnapshotClient.learningSnapshot({ courseId: "course-1", availableMinutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const crossCourseTaskClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task: { ...task, course_id: "course-2" }, candidate, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(crossCourseTaskClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const wrongCandidateClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate: { ...candidate, why: "Mismatched rationale." }, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(wrongCandidateClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const wrongTaskClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task: { ...task, source_id: "concept-2" }, candidate, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(wrongTaskClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const manualTask = { ...task, source_type: "manual", source_id: null };
+    const manualCoveredSnapshot = { ...snapshot, pending_tasks: [manualTask] };
+    const manualCoveredClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "covered_by_active_task", course_id: "course-1", snapshot: manualCoveredSnapshot, task: manualTask, candidate, bootstrap: null })) as unknown as typeof fetch);
+    await expect(manualCoveredClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).resolves.toMatchObject({ outcome: "covered_by_active_task", task: manualTask });
+
+    const invalidCompletedClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "covered_by_active_task", course_id: "course-1", snapshot: replaySnapshot, task: completedTask, candidate, bootstrap: null })) as unknown as typeof fetch);
+    await expect(invalidCompletedClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const courseTwoTask = { ...task, course_id: "course-2" };
+    const courseTwoSnapshot = { ...snapshot, course_id: "course-2", pending_tasks: [courseTwoTask] };
+    const wrongGetCourseClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(courseTwoSnapshot)) as unknown as typeof fetch);
+    await expect(wrongGetCourseClient.learningSnapshot({ courseId: "course-1", availableMinutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const thirtyMinuteSnapshot = { ...snapshot, available_minutes: 30 };
+    const wrongGetMinutesClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(thirtyMinuteSnapshot)) as unknown as typeof fetch);
+    await expect(wrongGetMinutesClient.learningSnapshot({ courseId: "course-1", availableMinutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const wrongPostCourseClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-2", snapshot: courseTwoSnapshot, task: courseTwoTask, candidate, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(wrongPostCourseClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const wrongPostMinutesClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot: thirtyMinuteSnapshot, task, candidate, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(wrongPostMinutesClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const emptyWithCandidateClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "empty", course_id: "course-1", snapshot: { ...snapshot, pending_tasks: [] }, task: null, candidate: null, bootstrap: null })) as unknown as typeof fetch);
+    await expect(emptyWithCandidateClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const wrongActionCandidate = { ...candidate, action: "review_due" as const };
+    const wrongActionClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ ...snapshot, candidates: [wrongActionCandidate] })) as unknown as typeof fetch);
+    await expect(wrongActionClient.learningSnapshot({ courseId: "course-1", availableMinutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const misconceptionCandidate = {
+      ...candidate,
+      id: "misconception:misconception-1:address_repeated_misconception",
+      action: "address_repeated_misconception" as const,
+      target_type: "misconception" as const,
+      target_id: "misconception-1",
+      concept_id: "concept-1",
+    };
+    const wrongMisconceptionTask = { ...task, id: "misconception-task", concept_id: "concept-2", source_id: "concept-2" };
+    const wrongMisconceptionSnapshot = { ...snapshot, pending_tasks: [wrongMisconceptionTask], candidates: [misconceptionCandidate] };
+    const wrongMisconceptionClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot: wrongMisconceptionSnapshot, task: wrongMisconceptionTask, candidate: misconceptionCandidate, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(wrongMisconceptionClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const bootstrap = {
+      course_id: "course-1", document_id: "document-1", concept_id: "concept-1", concept_name: "Limits",
+      mastery_probability: 0.2, mastery_attempts: 0, concept_created: true, mastery_initialized: true,
+      mastery_initialization_algorithm: "bootstrap/v1", mastery_initialization_algorithm_version: "1.0.0",
+    } as const;
+    const bootstrapClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap }, 201)) as unknown as typeof fetch);
+    await expect(bootstrapClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20, document_id: "document-1" })).resolves.toMatchObject({ bootstrap });
+
+    const wrongBootstrapCourseClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap: { ...bootstrap, course_id: "course-2" } }, 201)) as unknown as typeof fetch);
+    await expect(wrongBootstrapCourseClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20, document_id: "document-1" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const wrongBootstrapDocumentClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap }, 201)) as unknown as typeof fetch);
+    await expect(wrongBootstrapDocumentClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20, document_id: "document-2" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const unexpectedBootstrapClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap }, 201)) as unknown as typeof fetch);
+    await expect(unexpectedBootstrapClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const missingBootstrapClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "task_created", course_id: "course-1", snapshot, task, candidate, bootstrap: null }, 201)) as unknown as typeof fetch);
+    await expect(missingBootstrapClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20, document_id: "document-1" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const emptyBootstrapClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ outcome: "empty", course_id: "course-1", snapshot: { ...snapshot, pending_tasks: [], candidates: [] }, task: null, candidate: null, bootstrap }, 200)) as unknown as typeof fetch);
+    await expect(emptyBootstrapClient.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 20, document_id: "document-1" })).resolves.toMatchObject({ outcome: "empty", task: null, candidate: null, bootstrap });
+  });
+
+  it("rejects malformed autonomous-learning requests and responses before they affect the UI", async () => {
+    const fetchMock = vi.fn();
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+    await expect(Promise.resolve().then(() => client.learningSnapshot({ courseId: " ", availableMinutes: 20 }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => client.learningSnapshot({ courseId: " course-1 ", availableMinutes: 20 }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => client.learningSnapshot({ courseId: "course id", availableMinutes: 20 }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => client.learningSnapshot({ courseId: ".course-1", availableMinutes: 20 }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => client.learningSnapshot({ courseId: "course/1", availableMinutes: 20 }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => client.createAutonomousRecommendation({ course_id: "course-1", available_minutes: 0 }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const invalid = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({
+      course_id: "course-1", as_of: "2026-07-17T10:00:00+00:00", available_minutes: 20,
+      due_review_count: 0, incomplete_session_count: 0, misconception_count: 0,
+      pending_tasks: [], candidates: [], mastery_gap_count: 1, unexpected: true,
+    })) as unknown as typeof fetch);
+    await expect(invalid.learningSnapshot({ courseId: "course-1", availableMinutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+  });
+
   it("uploads a browser File as multipart without overriding its Content-Type", async () => {
     const imported = {
       document: { id: "doc-1", name: "notes.txt", mimeType: "text/plain", sizeBytes: 5, contentHash: "c".repeat(64), status: "queued", pageCount: 0, chunkCount: 0, parser: "plain-text", createdAt: "2026-07-15T12:00:00+00:00", error: null, courseIds: ["course-a"], ...pendingCapability },

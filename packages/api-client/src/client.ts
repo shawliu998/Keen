@@ -21,6 +21,8 @@ import {
 } from "./agentSchemas";
 import {
   answerStreamEventSchema,
+  autonomousRecommendationRequestSchema,
+  autonomousRecommendationResponseSchema,
   courseCreateRequestSchema,
   courseCreateResponseSchema,
   demoStateSchema,
@@ -33,17 +35,21 @@ import {
   healthResponseSchema,
   indexJobListResponseSchema,
   indexJobSchema,
+  learningSnapshotSchema,
   searchResponseSchema,
   type DemoState,
   type CourseCreateRequest,
   type CourseCreateResponse,
   type AnswerStreamEvent,
+  type AutonomousRecommendationRequest,
+  type AutonomousRecommendationResponse,
   type DocumentImportResponse,
   type DocumentCourseLinkResponse,
   type GroundedQueryResponse,
   type HealthResponse,
   type IndexJob,
   type IndexedDocument,
+  type LearningSnapshot,
   type SearchResponse,
 } from "./schemas";
 
@@ -124,6 +130,7 @@ export type AgentRunEventStreamOptions = RequestOptions & {
 };
 export type SearchRequest = { query: string; courseId?: string | null; limit?: number };
 export type GroundedQueryRequest = SearchRequest;
+export type LearningSnapshotRequest = { courseId: string; availableMinutes: number };
 export type AnswerStreamRequest = {
   question: string;
   courseId?: string | null;
@@ -381,6 +388,45 @@ export class LearningCoreClient {
     }, {
       expectedStatuses: [200, 201],
       validate: (status, result) => (status === 200) === result.replayed,
+    });
+  }
+
+  learningSnapshot(request: LearningSnapshotRequest, options: RequestOptions = {}): Promise<LearningSnapshot> {
+    const courseId = request.courseId;
+    if (!Number.isInteger(request.availableMinutes) || request.availableMinutes < 1 || request.availableMinutes > 1_440) {
+      throw new LearningCoreRequestError("/v1/learning-snapshot");
+    }
+    assertAgentIdentifier(courseId, "/v1/learning-snapshot");
+    const params = new URLSearchParams({ course_id: courseId, available_minutes: String(request.availableMinutes) });
+    return this.#request(`/v1/learning-snapshot?${params.toString()}`, learningSnapshotSchema, options, {
+      expectedStatuses: [200],
+      validate: (_status, result) => result.course_id === courseId && result.available_minutes === request.availableMinutes,
+    });
+  }
+
+  createAutonomousRecommendation(
+    request: AutonomousRecommendationRequest,
+    options: RequestOptions = {},
+  ): Promise<AutonomousRecommendationResponse> {
+    const parsed = autonomousRecommendationRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError("/v1/autonomous-recommendations");
+    return this.#request("/v1/autonomous-recommendations", autonomousRecommendationResponseSchema, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed.data),
+      signal: options.signal,
+    }, {
+      expectedStatuses: [200, 201],
+      validate: (status, result) => (
+        (status === 201) === (result.outcome === "task_created")
+        && result.course_id === parsed.data.course_id
+        && result.snapshot.available_minutes === parsed.data.available_minutes
+        && (parsed.data.document_id === undefined
+          ? result.bootstrap === null
+          : result.bootstrap !== null
+            && result.bootstrap.course_id === parsed.data.course_id
+            && result.bootstrap.document_id === parsed.data.document_id)
+      ),
     });
   }
 

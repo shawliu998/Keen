@@ -7,9 +7,25 @@ import { initialAgentActivityState } from "../src/features/agent/agentActivityRe
 import { HomePage } from "../src/features/home/HomePage";
 
 const runtimeState = vi.hoisted(() => ({ current: null as unknown as AgentRuntimeContextValue }));
+const learningCoreState = vi.hoisted(() => ({ current: {
+  status: "healthy", client: null, connectionGeneration: 0, demoState: undefined,
+  demoStatePending: false, demoStateError: null,
+} }));
 
 vi.mock("../src/services/AgentRuntimeProvider", () => ({
   useAgentRuntime: () => runtimeState.current,
+}));
+
+vi.mock("../src/services/LearningCoreProvider", () => ({
+  useLearningCore: () => learningCoreState.current,
+}));
+
+vi.mock("../src/features/feed/useAutonomousLearningFeed", () => ({
+  useAutonomousLearningFeed: () => ({
+    snapshot: undefined, snapshotPending: false, snapshotError: null, refetchSnapshot: vi.fn(),
+    createRecommendation: vi.fn(), cancelRecommendation: vi.fn(),
+    recommendation: { pending: false, cancelled: false, error: null, result: null },
+  }),
 }));
 
 const now = "2026-07-16T10:00:00.000Z";
@@ -73,7 +89,10 @@ describe("Agent Home", () => {
       userIntent: "Build a plan from my notes",
       input: {},
     });
-    expect(screen.getByText(/Recommendations and statistics below remain labeled sample content/i)).toBeInTheDocument();
+    expect(screen.getByText(/The feed below reads persisted learning evidence/i)).toBeInTheDocument();
+    expect(screen.queryByText("78%")).not.toBeInTheDocument();
+    expect(screen.queryByText("5 sources")).not.toBeInTheDocument();
+    expect(screen.queryByText("18 insights")).not.toBeInTheDocument();
   });
 
   it("keeps Browser Demo request-free and records only the local conversation handoff", async () => {

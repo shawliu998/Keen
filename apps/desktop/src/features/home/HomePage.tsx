@@ -5,6 +5,8 @@ import { Badge, Button, Card, IconButton, Progress } from "@keen/ui";
 import type { AgentRunKind, AgentRunMode } from "@keen/api-client";
 import { AgentActivityPanel, type AgentActivityViewState, type AgentMutationActionState } from "../agent/AgentActivityPanel";
 import { useAgentRuntime } from "../../services/AgentRuntimeProvider";
+import { useLearningCore } from "../../services/LearningCoreProvider";
+import { useAutonomousLearningFeed } from "../feed/useAutonomousLearningFeed";
 
 const prompts = [
   ["teach", "Teach eigenvectors with a visual analogy", BookOpen], ["ask", "Walk me through problem 4, one step at a time", Gauge],
@@ -22,12 +24,20 @@ function kindForMode(mode: AgentRunMode): AgentRunKind {
 export function HomePage() {
   const navigate = useNavigate();
   const runtime = useAgentRuntime();
+  const core = useLearningCore();
   const [mode, setMode] = useState<AgentRunMode>("ask");
   const [message, setMessage] = useState("");
   const [mutationTarget, setMutationTarget] = useState<string | null>(null);
   const demo = runtime.learningCoreStatus === "demo";
   const runActive = runtime.run !== null && !runtime.activity.terminal;
   const operationActive = runtime.phase === "creating" || runtime.phase === "recovering" || runtime.phase === "streaming" || runtime.phase === "cancelling";
+  const homeCourseId = core.demoState?.courses[0]?.id ?? null;
+  const homeFeed = useAutonomousLearningFeed({
+    client: core.client,
+    courseId: homeCourseId,
+    enabled: !demo && core.status === "healthy" && !core.demoStateError && core.demoState !== undefined,
+    connectionGeneration: core.connectionGeneration,
+  });
 
   const submit = async () => {
     if (!message.trim()) return;
@@ -102,7 +112,7 @@ export function HomePage() {
 
   return (
     <div className="home-page">
-      <div className="demo-disclosure"><Badge tone={demo ? "warning" : "accent"}>{demo ? "Demo surface" : "Local Agent"}</Badge><span>{demo ? "Prompts, recommendations, statistics, and attachments on this page are deterministic UI samples. No model runs, file is read, or learning record is changed." : "The composer and Agent activity use the authenticated local learning core. Recommendations and statistics below remain labeled sample content."}</span></div>
+      <div className="demo-disclosure"><Badge tone={demo ? "warning" : "accent"}>{demo ? "Demo surface" : "Local Agent"}</Badge><span>{demo ? "Prompts, recommendations, statistics, and attachments on this page are deterministic UI samples. No model runs, file is read, or learning record is changed." : "The composer and Agent activity use the authenticated local learning core. The feed below reads persisted learning evidence and does not create a recommendation."}</span></div>
       <section className="welcome-section">
         <div className="orb" aria-hidden><span>K</span></div>
         <div><p className="eyebrow">Local learning workspace</p><h1>What would you like to understand?</h1><p>Ask, teach, study, review, or plan across your learning materials.</p></div>
@@ -133,13 +143,16 @@ export function HomePage() {
           onRejectApproval={runtime.rejectApproval ? (approvalId) => { void runtime.rejectApproval?.(approvalId); } : undefined}
         />
       </div> : null}
-      <section className="home-section"><div className="home-section-head"><div><Sparkles size={16} /><h2>Proactive Learning Feed</h2><Badge tone="warning">Sample · 3 for today</Badge></div><button onClick={() => navigate("/feed")}>View all <ArrowRight size={14} /></button></div>
-        <div className="feed-preview">
+      <section className="home-section"><div className="home-section-head"><div><Sparkles size={16} /><h2>Proactive Learning Feed</h2><Badge tone={demo ? "warning" : "accent"}>{demo ? "Sample · 3 for today" : "Local evidence"}</Badge></div><button onClick={() => navigate("/feed")}>View all <ArrowRight size={14} /></button></div>
+        {demo ? <div className="feed-preview">
           <Card className="priority-card"><div className="priority-top"><Badge tone="warning">Recommended next</Badge><span>18 min</span></div><h3>Review eigenvectors before Chapter 6</h3><p>You missed this concept twice yesterday, and it unlocks your next chapter.</p><div className="concept-line"><span>Mastery</span><Progress value={42} /><strong>42%</strong></div><Button className="primary" onClick={() => navigate("/deep-learn/1")}>Start review <ArrowRight size={14} /></Button></Card>
           <div className="mini-task-list">{[["Cellular respiration recall", "Biology 101 · 12 min", "Due 2:00 PM"], ["Practice confidence intervals", "Statistics · 25 min", "Tomorrow"]].map(([title, meta, due]) => <button key={title} onClick={() => navigate("/feed")}><span><strong>{title}</strong><small>{meta}</small></span><Badge>{due}</Badge><ArrowRight size={14} /></button>)}</div>
-        </div>
+        </div> : core.status !== "healthy" ? <Card><p>The local learning service is unavailable, so Keen is not showing sample recommendations.</p></Card> : core.demoStatePending || homeFeed.snapshotPending ? <Card><p>Loading persisted learning evidence. No recommendation is being created.</p></Card> : core.demoStateError || homeFeed.snapshotError ? <Card><p>Keen could not validate the local learning feed. No recommendation or task was created.</p><Button onClick={() => { void homeFeed.refetchSnapshot(); }}>Retry feed</Button></Card> : homeCourseId === null ? <Card><p>Create a local course before Keen can inspect learning evidence.</p></Card> : <div className="feed-preview">
+          <Card className="priority-card"><div className="priority-top"><Badge tone="accent">{homeFeed.snapshot?.candidates[0] ? "Eligible next action" : "No eligible action"}</Badge><span>{homeFeed.snapshot?.candidates[0]?.estimated_minutes ?? 0} min</span></div><h3>{homeFeed.snapshot?.candidates[0]?.why ?? "No active learning action"}</h3><p>{homeFeed.snapshot?.candidates[0] ? "This is a deterministic observation of stored learning evidence; it has not created a task." : "No local task or recommendation was created."}</p><Button className="primary" onClick={() => navigate("/feed")}>Open learning feed <ArrowRight size={14} /></Button></Card>
+          <div className="mini-task-list">{homeFeed.snapshot?.pending_tasks.length ? homeFeed.snapshot.pending_tasks.slice(0, 2).map((task) => <button key={task.id} onClick={() => navigate("/feed")}><span><strong>{task.title}</strong><small>{task.estimated_minutes} min · persisted local task</small></span><Badge>{task.status}</Badge><ArrowRight size={14} /></button>) : <p>No active local tasks.</p>}</div>
+        </div>}
       </section>
-      <section className="home-section home-stats"><button onClick={() => navigate("/quiz")}><Gauge size={18} /><span><small>Practice accuracy</small><strong>78%</strong><em>+6% this week</em></span></button><button onClick={() => navigate("/knowledge")}><BookOpen size={18} /><span><small>Knowledge base</small><strong>5 sources</strong><em>4 fully indexed</em></span></button><button onClick={() => navigate("/memory")}><Brain size={18} /><span><small>Learner memory</small><strong>18 insights</strong><em>2 need review</em></span></button></section>
+      {demo ? <section className="home-section home-stats"><button onClick={() => navigate("/quiz")}><Gauge size={18} /><span><small>Practice accuracy</small><strong>78%</strong><em>+6% this week</em></span></button><button onClick={() => navigate("/knowledge")}><BookOpen size={18} /><span><small>Knowledge base</small><strong>5 sources</strong><em>4 fully indexed</em></span></button><button onClick={() => navigate("/memory")}><Brain size={18} /><span><small>Learner memory</small><strong>18 insights</strong><em>2 need review</em></span></button></section> : null}
     </div>
   );
 }
