@@ -307,13 +307,14 @@ def test_concrete_ollama_agent_executes_scoped_read_tool_without_public_data_lea
         "list_study_feed",
         "list_due_reviews",
         "search_course_knowledge",
+        "complete_study_task",
     }
     catalog_fields = {
         field
         for tool in first_request["tools"]
         for field in tool["function"]["parameters"].get("properties", {})
     }
-    assert catalog_fields == {"limit", "query"}
+    assert catalog_fields == {"limit", "query", "task_id", "expected_revision"}
     assert not {"course_id", "as_of", "due_at"} & catalog_fields
     assert second_request["messages"][-2]["role"] == "assistant"
     assert second_request["messages"][-2]["tool_calls"][0]["function"]["name"] == (
@@ -525,6 +526,7 @@ def test_concrete_ollama_agent_searches_only_scoped_course_knowledge_privately(
         "list_study_feed",
         "list_due_reviews",
         "search_course_knowledge",
+        "complete_study_task",
     }
     search_catalog = next(
         tool["function"]
@@ -1100,7 +1102,7 @@ class _ToolCallingProvider:
 
     def __init__(self, calls: list[ToolCall], *, blocked: bool = False) -> None:
         self.calls = calls
-        self.feedback: list[ProviderToolResult] = []
+        self.feedback: list[ProviderToolResult | ProviderToolError] = []
         self.requests: list[ProviderRequest] = []
         self.closed = False
         self.release = threading.Event()
@@ -1114,7 +1116,9 @@ class _ToolCallingProvider:
             yield call
         yield ProviderFinished()
 
-    async def submit_tool_result(self, result: ProviderToolResult) -> None:
+    async def submit_tool_result(
+        self, result: ProviderToolResult | ProviderToolError
+    ) -> None:
         self.feedback.append(result)
 
     async def aclose(self) -> None:
@@ -1122,7 +1126,7 @@ class _ToolCallingProvider:
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "arguments"),
+    ("tool_name", "arguments", "expected_status", "expected_error", "audited_failure"),
     [
         (
             "complete_study_task",
@@ -1132,12 +1136,26 @@ class _ToolCallingProvider:
                 "expected_revision": 0,
                 "completed_at": "2026-07-16T10:00:00Z",
             },
+            "completed",
+            None,
+            True,
         ),
-        ("export_study_data", {"course_id": "course-calculus", "format": "json"}),
+        (
+            "export_study_data",
+            {"course_id": "course-calculus", "format": "json"},
+            "failed",
+            "provider_protocol_error",
+            False,
+        ),
     ],
 )
-def test_production_runtime_rejects_level_two_and_three_before_tool_start(
-    tmp_path, tool_name, arguments
+def test_production_runtime_rejects_direct_write_arguments_and_level_three(
+    tmp_path,
+    tool_name,
+    arguments,
+    expected_status,
+    expected_error,
+    audited_failure,
 ):
     settings = _settings(tmp_path, seed_demo=True)
     provider = _ToolCallingProvider(
@@ -1170,12 +1188,22 @@ def test_production_runtime_rejects_level_two_and_three_before_tool_start(
         assert created.status_code == 202
         run_id = created.json()["id"]
         terminal = _wait_for_terminal(client, run_id)
-        assert terminal["status"] == "failed"
-        assert terminal["errorCode"] == "provider_protocol_error"
+        assert terminal["status"] == expected_status
+        assert terminal["errorCode"] == expected_error
         events = _sse_events(
             client.get(f"/v1/agent/runs/{run_id}/events", headers=AUTH).text
         )
-        assert not any(event["event"] == "tool_start" for event in events)
+        assert (
+            any(event["event"] == "tool_start" for event in events) is audited_failure
+        )
+        if audited_failure:
+            failed = next(
+                json.loads(event["data"])
+                for event in events
+                if event["event"] == "tool_result"
+            )
+            assert failed["code"] == "invalid_arguments"
+            assert failed["failed"] is True
 
     with Database(settings.database_path).connection() as connection:
         task = connection.execute(
@@ -1186,7 +1214,12 @@ def test_production_runtime_rejects_level_two_and_three_before_tool_start(
         ).fetchone()[0]
     assert tuple(task) == ("upcoming", 0)
     assert invocation_count == 0
-    assert provider.feedback == []
+    if audited_failure:
+        assert len(provider.feedback) == 1
+        assert isinstance(provider.feedback[0], ProviderToolError)
+        assert provider.feedback[0].code == "invalid_arguments"
+    else:
+        assert provider.feedback == []
     assert provider.closed is True
 
 

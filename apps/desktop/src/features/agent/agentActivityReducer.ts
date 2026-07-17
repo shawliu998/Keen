@@ -24,6 +24,7 @@ export const initialAgentActivityState: AgentActivityState = {
   tools: [],
   mutations: [],
   warnings: [],
+  pendingApproval: null,
   error: null,
 };
 
@@ -131,12 +132,14 @@ export function agentActivityReducer(state: AgentActivityState, action: AgentAct
       terminal: isTerminal(action.status),
       partial: false,
       tools: settleRunningTools(state.tools, action.status),
+      pendingApproval: isTerminal(action.status) ? null : state.pendingApproval,
     };
   }
   if (action.type === "stream_disconnected") {
     if (state.terminal) return state;
     return { ...state, status: "partial", partial: true };
   }
+  if (action.type === "pending_approval") return { ...state, pendingApproval: action.approval };
 
   const event = action.event;
   if (state.receivedEventIds.includes(event.id)) return state;
@@ -153,6 +156,7 @@ export function agentActivityReducer(state: AgentActivityState, action: AgentAct
     lastEventId: event.id,
     receivedEventIds: boundedAppend(state.receivedEventIds, event.id, MAX_TRACKED_EVENT_IDS),
     tools: durableStatus === null ? state.tools : settleRunningTools(state.tools, durableStatus),
+    pendingApproval: terminal ? null : state.pendingApproval,
   };
 
   switch (event.type) {
@@ -181,15 +185,23 @@ export function agentActivityReducer(state: AgentActivityState, action: AgentAct
     case "error":
       return {
         ...next,
+        pendingApproval: null,
         error: {
           code: event.data.code,
           message: event.data.message ?? null,
           retryable: event.data.retryable,
         },
       };
+    case "checkpoint":
+      if (event.data.label === "approval_requested") {
+        return { ...next, status: "waiting_approval", durableStatus: "waiting_approval", pendingApproval: event.data.data as AgentActivityState["pendingApproval"] };
+      }
+      if (event.data.label === "approval_resolved") {
+        return state.pendingApproval?.approvalId === event.data.data.approvalId ? { ...next, pendingApproval: null } : next;
+      }
+      return next;
     case "metadata":
     case "status":
-    case "checkpoint":
     case "done":
       return next;
   }

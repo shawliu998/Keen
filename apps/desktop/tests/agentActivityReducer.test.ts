@@ -39,6 +39,16 @@ describe("Agent activity reducer", () => {
     expect(state).toMatchObject({ status, durableStatus: status, terminal, partial: false });
   });
 
+  it("tracks one safe approval request and clears it on resolution or terminal state", () => {
+    const requested: AgentRunEvent = { id: "approval-requested", type: "checkpoint", data: { label: "approval_requested", data: { approvalId: "approval-1", toolName: "complete_study_task", summary: { title: "Complete task", taskTitle: "Read chapter", courseTitle: "Physics", effect: "Marks the local task complete." } } } };
+    const pending = reduce([requested, requested]);
+    expect(pending).toMatchObject({ status: "waiting_approval", pendingApproval: { approvalId: "approval-1" }, receivedEventIds: ["approval-requested"] });
+    const resolved = agentActivityReducer(pending, { type: "event", event: { id: "approval-resolved", type: "checkpoint", data: { label: "approval_resolved", data: { approvalId: "approval-1", status: "approved" } } } });
+    expect(resolved.pendingApproval).toBeNull();
+    const terminal = agentActivityReducer(pending, { type: "event", event: { id: "approval-done", type: "done", data: { status: "completed" } } });
+    expect(terminal.pendingApproval).toBeNull();
+  });
+
   it("marks done and error events terminal with their durable outcomes", () => {
     const completed = reduce([{ id: "done-1", type: "done", data: { status: "completed" } }]);
     expect(completed).toMatchObject({ status: "completed", durableStatus: "completed", terminal: true, error: null });

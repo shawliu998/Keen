@@ -5,6 +5,7 @@ import {
   LearningCoreSchemaError,
   agentMutationActionRequestSchema,
   agentMutationActionResponseSchema,
+  agentLevel2PendingApprovalSchema,
   agentRunCreateRequestSchema,
   agentRunEventSchema,
   agentRunSchema,
@@ -157,6 +158,16 @@ describe("LearningCoreClient Agent run JSON contract", () => {
       type: "checkpoint",
       data: { label: "private", data: { internalReasoning: "trace" } },
     }).success).toBe(false);
+  });
+
+  it("accepts only strict Level 2 approval checkpoints", () => {
+    const data = { approvalId: "approval-1", toolName: "complete_study_task", summary: { title: "Complete task", taskTitle: "Read chapter", courseTitle: "Physics", effect: "Marks the local task complete." } };
+    expect(agentLevel2PendingApprovalSchema.safeParse(data).success).toBe(true);
+    expect(agentRunEventSchema.safeParse({ id: "approval-event", type: "checkpoint", data: { label: "approval_requested", data } }).success).toBe(true);
+    expect(agentRunEventSchema.safeParse({ id: "bad-approval", type: "checkpoint", data: { label: "approval_requested", data: { ...data, args: { taskId: "private" } } } }).success).toBe(false);
+    expect(agentRunEventSchema.safeParse({ id: "bad-label", type: "checkpoint", data: { label: "approval_resolved", data: { approvalId: "approval-1", status: "approved", reasoning: "private" } } }).success).toBe(false);
+    expect(agentRunEventSchema.safeParse({ id: "bad-resolution-error", type: "checkpoint", data: { label: "approval_resolved", data: { approvalId: "approval-1", status: "denied", error: { detail: "private database path" } } } }).success).toBe(false);
+    expect(agentRunEventSchema.safeParse({ id: "bad-resolution-status", type: "checkpoint", data: { label: "approval_resolved", data: { approvalId: "approval-1", status: "completed" } } }).success).toBe(false);
   });
 
   it("accepts only the redacted failed tool-result contract", () => {
@@ -347,6 +358,86 @@ describe("LearningCoreClient Agent mutation action contract", () => {
     ).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(LearningCoreResponseError);
     expect(error).toMatchObject({ status: 409, detail: { code: null } });
+  });
+});
+
+describe("LearningCoreClient Level 2 approval actions", () => {
+  it("uses strict pending, confirm, and reject routes with replay responses", async () => {
+    const approval = { approvalId: "approval-1", toolName: "complete_study_task", summary: { title: "Complete task", taskTitle: "Read chapter", courseTitle: "Physics", effect: "Marks the local task complete." } } as const;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void init;
+      const url = String(input);
+      if (url.endsWith("/pending")) return jsonResponse({ run: queuedRun, approvals: [approval] });
+      return jsonResponse({ run: queuedRun, approvalId: "approval-1", resolution: url.endsWith("/confirm") ? "confirmed" : "rejected", replayed: true });
+    });
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+    await expect(client.getPendingLevel2Actions("run-1")).resolves.toEqual({ run: queuedRun, approvals: [approval] });
+    await expect(client.confirmLevel2Action("run-1", "approval-1", { idempotencyKey: "approval-key-1" })).resolves.toMatchObject({ resolution: "confirmed", replayed: true });
+    await expect(client.rejectLevel2Action("run-1", "approval-1", { idempotencyKey: "approval-key-1" })).resolves.toMatchObject({ resolution: "rejected", replayed: true });
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://127.0.0.1:8080/v1/agent/runs/run-1/level2-actions/pending",
+      "http://127.0.0.1:8080/v1/agent/runs/run-1/level2-actions/approval-1/confirm",
+      "http://127.0.0.1:8080/v1/agent/runs/run-1/level2-actions/approval-1/reject",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ idempotencyKey: "approval-key-1" });
+  });
+
+  it.each([
+    ["approval_conflict", 409, false],
+    ["approval_action_failed", 500, true],
+  ] as const)("maps the allowlisted %s error for approval actions", async (code, status, retryable) => {
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => jsonResponse({
+        detail: {
+          code,
+          message: "The approval outcome is safe to refresh.",
+          retryable,
+          recoveryAction: "Refresh and use the same request key if retrying.",
+        },
+      }, status)) as unknown as typeof fetch,
+    );
+
+    const error = await client.confirmLevel2Action(
+      "run-1",
+      "approval-1",
+      { idempotencyKey: "approval-key-1" },
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LearningCoreResponseError);
+    expect(error).toMatchObject({ status, detail: { code, retryable } });
+  });
+
+  it("accepts expired only as a confirmation outcome", async () => {
+    const failedRun = {
+      ...queuedRun,
+      status: "failed",
+      errorCode: "approval_action_expired",
+      errorDetail: "The task changed before confirmation.",
+      startedAt: timestamp,
+      finishedAt: timestamp,
+    } as const;
+    const client = createLearningCoreClient(
+      "http://127.0.0.1:8080",
+      token,
+      vi.fn(async () => jsonResponse({
+        run: failedRun,
+        approvalId: "approval-1",
+        resolution: "expired",
+        replayed: false,
+      })) as unknown as typeof fetch,
+    );
+
+    await expect(client.confirmLevel2Action(
+      "run-1",
+      "approval-1",
+      { idempotencyKey: "approval-expired-1" },
+    )).resolves.toMatchObject({ resolution: "expired", run: { status: "failed" } });
+    await expect(client.rejectLevel2Action(
+      "run-1",
+      "approval-1",
+      { idempotencyKey: "approval-expired-1" },
+    )).rejects.toBeInstanceOf(LearningCoreSchemaError);
   });
 });
 

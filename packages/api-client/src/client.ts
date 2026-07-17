@@ -3,12 +3,18 @@ import {
   agentCancelResponseSchema,
   agentMutationActionRequestSchema,
   agentMutationActionResponseSchema,
+  agentLevel2ApprovalRequestSchema,
+  agentLevel2ApprovalResponseSchema,
+  agentLevel2PendingActionsResponseSchema,
   agentRunCreateRequestSchema,
   agentRunEventSchema,
   agentRunSchema,
   type AgentCancelResponse,
   type AgentMutationActionRequest,
   type AgentMutationActionResponse,
+  type AgentLevel2ApprovalRequest,
+  type AgentLevel2ApprovalResponse,
+  type AgentLevel2PendingActionsResponse,
   type AgentRun,
   type AgentRunCreateRequest,
   type AgentRunEvent,
@@ -153,6 +159,8 @@ const agentResponseErrorCodeSchema = z.enum([
   "mutation_already_undone",
   "idempotency_conflict",
   "mutation_action_failed",
+  "approval_conflict",
+  "approval_action_failed",
 ]);
 export type AgentResponseErrorCode = z.infer<typeof agentResponseErrorCodeSchema>;
 
@@ -160,7 +168,7 @@ function isAgentErrorCodeAllowedForStatus(status: number, code: AgentResponseErr
   if (status === 503) return code === "provider_missing" || code === "provider_unavailable";
   if (status === 403) return code === "mutation_action_forbidden";
   if (status === 404) return code === "mutation_not_found";
-  if (status === 500) return code === "mutation_action_failed";
+  if (status === 500) return code === "mutation_action_failed" || code === "approval_action_failed";
   if (status !== 409) return false;
   return [
     "agent_busy",
@@ -173,6 +181,7 @@ function isAgentErrorCodeAllowedForStatus(status: number, code: AgentResponseErr
     "redo_unavailable",
     "mutation_already_undone",
     "idempotency_conflict",
+    "approval_conflict",
   ].includes(code);
 }
 
@@ -507,6 +516,43 @@ export class LearningCoreClient {
       agentCancelResponseSchema,
       { method: "POST", signal: options.signal },
     );
+  }
+
+  getPendingLevel2Actions(runId: string, options: RequestOptions = {}): Promise<AgentLevel2PendingActionsResponse> {
+    const path = "/v1/agent/runs/{id}/level2-actions/pending";
+    assertAgentIdentifier(runId, path);
+    return this.#request(
+      `/v1/agent/runs/${encodeURIComponent(runId)}/level2-actions/pending`,
+      agentLevel2PendingActionsResponseSchema,
+      options,
+      { expectedStatuses: [200], validate: (_status, result) => result.run.id === runId },
+    );
+  }
+
+  confirmLevel2Action(runId: string, approvalId: string, request: AgentLevel2ApprovalRequest, options: RequestOptions = {}): Promise<AgentLevel2ApprovalResponse> {
+    return this.#level2Action("confirm", runId, approvalId, request, options);
+  }
+
+  rejectLevel2Action(runId: string, approvalId: string, request: AgentLevel2ApprovalRequest, options: RequestOptions = {}): Promise<AgentLevel2ApprovalResponse> {
+    return this.#level2Action("reject", runId, approvalId, request, options);
+  }
+
+  #level2Action(action: "confirm" | "reject", runId: string, approvalId: string, request: AgentLevel2ApprovalRequest, options: RequestOptions): Promise<AgentLevel2ApprovalResponse> {
+    const path = `/v1/agent/runs/{id}/level2-actions/{approvalId}/${action}`;
+    assertAgentIdentifier(runId, path);
+    assertAgentIdentifier(approvalId, path);
+    const parsed = agentLevel2ApprovalRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(`/v1/agent/runs/${encodeURIComponent(runId)}/level2-actions/${encodeURIComponent(approvalId)}/${action}`, agentLevel2ApprovalResponseSchema, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed.data), signal: options.signal,
+    }, {
+      expectedStatuses: [200],
+      validate: (_status, result) => result.run.id === runId
+        && result.approvalId === approvalId
+        && (action === "confirm"
+          ? result.resolution === "confirmed" || result.resolution === "expired"
+          : result.resolution === "rejected"),
+    });
   }
 
   undoAgentMutation(

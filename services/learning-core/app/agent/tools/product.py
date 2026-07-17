@@ -38,6 +38,7 @@ _MAX_KNOWLEDGE_TEXT_CHARS = 1_200
 _MAX_KNOWLEDGE_TOTAL_TEXT_CHARS = 6_000
 _MAX_KNOWLEDGE_SECTION_PARTS = 8
 _MAX_KNOWLEDGE_SECTION_PART_CHARS = 256
+_MAX_SQLITE_INTEGER = (1 << 63) - 1
 
 
 def _require_utc(value: datetime) -> datetime:
@@ -418,7 +419,7 @@ def _is_retryable_sqlite_read_error(error: sqlite3.OperationalError) -> bool:
     return str(error).casefold() in {"database is busy", "database is locked"}
 
 
-class CompleteStudyTaskArguments(ToolArguments):
+class CompleteStudyTaskScopedArguments(ToolArguments):
     task_id: str = Field(
         min_length=1,
         max_length=256,
@@ -429,13 +430,27 @@ class CompleteStudyTaskArguments(ToolArguments):
         max_length=256,
         pattern=SAFE_IDENTIFIER_PATTERN,
     )
-    expected_revision: int = Field(ge=0)
+    expected_revision: int = Field(strict=True, ge=0, le=_MAX_SQLITE_INTEGER)
+
+
+class CompleteStudyTaskArguments(CompleteStudyTaskScopedArguments):
     completed_at: datetime
 
     @field_validator("completed_at")
     @classmethod
     def validate_completed_at(cls, value: datetime) -> datetime:
         return _require_utc(value)
+
+
+class CompleteStudyTaskProposalArguments(ToolArguments):
+    """The only fields a structured provider may propose for Level 2 work."""
+
+    task_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=SAFE_IDENTIFIER_PATTERN,
+    )
+    expected_revision: int = Field(strict=True, ge=0, le=_MAX_SQLITE_INTEGER)
 
 
 class CompleteStudyTaskOutput(ToolOutput):
@@ -446,9 +461,11 @@ class CompleteStudyTaskOutput(ToolOutput):
 
 class CompleteStudyTaskTool:
     name = "complete_study_task"
+    description = "Propose marking one scoped study task complete; user approval is required before any change."
     permission_level = PermissionLevel.LOCAL_REVERSIBLE
     effect = ToolEffect.LOCAL_WRITE
     arguments_model = CompleteStudyTaskArguments
+    proposal_arguments_model = CompleteStudyTaskProposalArguments
     result_model = CompleteStudyTaskOutput
 
     async def execute(

@@ -55,7 +55,7 @@ Status: **in progress**. The document/import/retrieval/citation portions exist; 
 | Quiz | Three bundled single-choice questions scored in React state | `not started`; no assessment records or mastery/review mutation |
 | Flashcards | Bundled sample cards and in-memory ratings | `not started`; FSRS is not connected |
 | Learning Feed | Real `/v1/demo-state` task/mastery read with no live mutation | `in progress`; candidate generation, rationale and actions are `not started` |
-| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, typed tools/results, audited mutations, provider-private multi-turn feedback, allowlisted Study Task Undo/Redo HTTP, a visible Home Agent runtime/activity surface, and a configured loopback text-only provider | `in progress`; production tool selection with run-derived scope, approval execution, remaining tool groups and lifecycle E2E are open |
+| Agent | Authenticated create/get/cancel/SSE run API, strict TypeScript client, three host-scoped Level 1 reads, one confirmed `complete_study_task` Level 2 path, audited mutations, provider-private multi-turn feedback, Study Task Undo/Redo, and a visible Home Agent runtime/activity surface | `in progress`; broader Level 2 domains, Level 3, remaining tool groups and packaged GUI lifecycle E2E are open |
 | Mastery | Deterministic BKT accepts only `concept_id` + boolean correctness and writes a basic event | `in progress`; evidence weighting, traceability and algorithm version are `not started` |
 | Recovery | Index-job/sidecar recovery plus idempotent Agent startup terminal recovery and a real-Uvicorn/socket SIGKILL/restart E2E exist | `in progress`; automatic Tauri relaunch and conversation/session/attempt/review recovery remain open |
 
@@ -84,7 +84,7 @@ The current `app/main.py` exposes:
 - tasks/mastery: `GET/POST /v1/tasks`, `PATCH /v1/tasks/{id}`, `GET /v1/mastery`, `POST /v1/mastery/attempts`;
 - documents/jobs: import/list/content, course link/unlink, job list/get/cancel, retry/reindex/delete;
 - retrieval: `POST /v1/search`, deterministic `POST /v1/query`, and generated `POST /v1/answer/stream` SSE.
-- Agent: authenticated `POST /v1/agent/runs`, `GET /v1/agent/runs/{run_id}`, `POST /v1/agent/runs/{run_id}/cancel`, and durable `GET /v1/agent/runs/{run_id}/events` SSE.
+- Agent: authenticated create/get/cancel/events, pending Level 2 action listing, confirm/reject, and Study Task Undo/Redo resources under `/v1/agent/runs`.
 
 All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation and mutation actions are capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet. The Agent API has a strict frontend client, allowlisted Study Task Undo/Redo resources and a visible Home runtime/activity surface. A configured loopback local-chat model now drives a real text-only Agent provider; installations without that configuration still truthfully return `provider_missing`.
 
@@ -120,7 +120,7 @@ The model may interpret goals, choose registered tools, draft teaching text/ques
 
 ## New domain model and migration order
 
-Status for migrations `009`–`018`: **verified** for forward migration,
+Status for migrations `009`–`020`: **verified** for forward migration,
 constraints, repositories, and legacy-row preservation. This is persistence
 evidence only; it does not claim that the HTTP learning loop or UI exists.
 Responsibilities remain separate even if implementation discovers that a
@@ -138,6 +138,8 @@ compatibility table or follow-up index is necessary.
 | `016_study_plans.sql` | additive `study_tasks` source/priority/rationale/schedule/completion/feedback fields and `study_task_feedback` (the filename follows the requested migration sequence; its bounded responsibility is Feed/task planning state) | Preserve existing tasks/statuses with compatible backfill; store explainable priority components and source identity; no calendar write |
 | `017_review_fsrs_identity.sql` | additive stable identity and validated adapter state for `review_schedules` | Preserve applied 015 data; backfill a unique positive `fsrs_card_id`; make pristine new rows restartable under the pinned Keen v1 scheduler; enforce identity/state agreement without rewriting migration 015 |
 | `018_agent_undo_tracking.sql` | additive Undo lifecycle fields and tamper-resistant tracking for `state_mutations` | Preserve existing audit rows; require one dedicated succeeded Level 2 inverse in the same run; reject pretracked inserts, repeated Undo, forged relationships and post-Undo mutation/invocation changes |
+| `019_agent_course_scope.sql` | immutable `agent_runs.course_scope_id` audit scope | Backfill from persisted session/conversation context, reject mismatches and retain scope after context detachment |
+| `020_level2_approval_actions.sql` | private canonical Level 2 proposal arguments linked to proposal/execution audit | Preserve public redaction; require a denied proposal invocation, immutable arguments, one host execution invocation and idempotent resolution |
 
 Every JSON text column must pass Pydantic/Zod validation at the boundary and `json_valid` where SQLite supports the invariant. Use foreign keys, status checks, indexes for recovery and due queries, transactionally consistent writes, and explicit `created_at`/`updated_at`. Migration tests must cover empty database, `001` legacy database, current `008` database with user rows, repeated startup, constraint failure and interrupted upgrade. No destructive reset is an accepted recovery action.
 
@@ -162,9 +164,11 @@ use the configured loopback chat model as a text-only provider or return truthfu
 `provider_missing` behavior rather than automation when it is absent.
 The Home surface now creates, gets, cancels and reconnects runs, renders public
 activity, and invokes visible Study Task Undo/Redo controls from durable audit
-events. Process-restart provider continuation, approval execution, remaining
-tool groups and a production tool-selecting provider with run-derived scope remain
-`not started`; the provider-private feedback protocol itself is implemented.
+events. The configured structured provider can select three host-scoped reads
+and propose `complete_study_task`; the host pauses for visible Confirm/Reject,
+executes the confirmed write atomically with reversible audit, and fails pending
+approval closed on restart. Process-restart provider continuation, broader Level
+2 domains, Level 3, and remaining tool groups remain open.
 
 One orchestrator uses a typed `AgentTool` registry. Each invocation records permission level, validated arguments, bounded result summary, status and timing. A Level 2 write and its `tool_invocation`/`state_mutation` records commit in the same SQLite transaction. Replayed or recovered runs use the idempotency key and never repeat a completed mutation.
 
@@ -552,6 +556,25 @@ lint/typecheck/build, Ruff lint/format, compileall and `git diff --check`. This
 does not implement approval execution, hybrid Agent retrieval, packaged GUI
 lifecycle E2E or the remaining learning-loop gates.
 
+The next slice implements one closed Level 2 approval action without resuming
+the model after approval. A provider can propose `complete_study_task` with only
+task ID and expected revision. The host binds persisted course scope and UTC
+time, stores immutable canonical arguments in migration 020, closes the provider
+turn at `waiting_approval`, and publishes only a bounded task/course/effect
+summary. Confirm performs one atomic host-owned execution with reversible
+mutation audit and durable terminal events; Reject, cancel, stale revision and
+restart leave the task unchanged. Same-key resolution replays, conflicting
+resolution fails, and the existing Undo path reverses a confirmed completion.
+Invalid proposal arguments produce a durable redacted failed step before private
+correction feedback. The desktop fetches pending state after reconnect and uses
+single-flight Confirm/Reject with stable unknown-outcome idempotency. Full
+validation passed Python 811/811 and desktop 191/191 plus Ruff lint/format,
+compileall, ESLint, strict typecheck, production build and `git diff --check`.
+Final independent Sol review found no remaining P0/P1/P2.
+The visual run remained `missing_reference`; this is functional evidence only,
+not a HyperKnow parity claim. Broader approvals, hybrid retrieval, packaged GUI
+lifecycle E2E and the remaining learning-loop gates remain open.
+
 ### Gate 4 — durable Conversation and Deep Learn
 
 Status: **not started**.
@@ -596,7 +619,7 @@ Status: **in progress**. The pinned FSRS dependency passed isolated lock,
 license, import and PyInstaller one-file checks; the latest adapter/migration
 still requires the final Gate 7 `.app`/`.dmg` rebuild and mounted smoke.
 
-Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`018` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
+Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`020` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
 
 ## Risks and mitigations
 

@@ -134,6 +134,8 @@ A current-image run has completed, but comparison cannot run without an authoriz
 
 The 2026-07-17 recoverable-read slice adds a red recoverable-failure dot, grey cancelled/stopped dots, and explicit lifecycle copy. Its event/schema/reducer/panel behavior is tested, but no new screenshot or authorized visual diff was captured; spacing, color and copy remain provisional visual work rather than parity evidence.
 
+The 2026-07-17 Level 2 slice adds a Home Agent confirmation card with a safe task/course/effect summary, Confirm/Reject controls, pending feedback, offline blocking and explicit unknown-outcome copy. Component/runtime tests cover those states. The visual harness was rerun at 1440×920 against the deterministic Home route and produced `missing_reference`; that route does not fixture a live waiting-approval run, and no authorized HyperKnow reference is present. Approval-card spacing, typography, button treatment and responsive behavior therefore remain `implemented / unverified` visually, with no mismatch percentage or parity claim.
+
 | Date | Reference ID | Route/state | Viewport | Seed | Mismatch | Artifact paths | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-07-15 | Missing | `/?demo=true&visualTest=true` | 1440×920 @1x | Deterministic frontend seed | Not computed | `artifacts/visual-diff/current/home.png`, `artifacts/visual-diff/report.json` | `missing_reference`; no parity claim |

@@ -101,10 +101,12 @@ class ProviderToolSpec(BaseModel):
 
 
 class ProviderToolPolicy(BaseModel):
-    """The read-only tool catalog a provider may see for one run.
+    """The closed tool catalog a provider may see for one run.
 
-    The catalog is derived from a host-trusted registry. The allowed tool
-    names are always derived from the catalog, so the two cannot drift apart.
+    The default constructor accepts only automatic reads. A separate explicit
+    constructor admits the one proposal-only Level 2 capability; it does not
+    grant provider execution authority. Allowed names always derive from the
+    catalog, so the two cannot drift apart.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -126,16 +128,47 @@ class ProviderToolPolicy(BaseModel):
 
     @classmethod
     def from_readonly_registry(cls, registry: ToolRegistry) -> ProviderToolPolicy:
+        return cls._from_registry(registry, proposal_tool_names=frozenset())
+
+    @classmethod
+    def from_registry_with_proposals(
+        cls,
+        registry: ToolRegistry,
+        *,
+        proposal_tool_names: frozenset[str],
+    ) -> ProviderToolPolicy:
+        if proposal_tool_names != frozenset({"complete_study_task"}):
+            raise ValueError("only the closed study-task proposal tool is supported")
+        return cls._from_registry(registry, proposal_tool_names=proposal_tool_names)
+
+    @classmethod
+    def _from_registry(
+        cls,
+        registry: ToolRegistry,
+        *,
+        proposal_tool_names: frozenset[str],
+    ) -> ProviderToolPolicy:
         if not registry.tools:
             raise ValueError("read-only registry must register at least one tool")
+        if not proposal_tool_names.issubset(registry.tools):
+            raise ValueError("proposal tool is not registered")
         specs: list[ProviderToolSpec] = []
         for tool in registry.tools.values():
-            if (
+            proposal_only_level_two = (
+                tool.name in proposal_tool_names
+                and tool.permission_level is PermissionLevel.LOCAL_REVERSIBLE
+                and tool.effect is ToolEffect.LOCAL_WRITE
+            )
+            if not proposal_only_level_two and (
                 tool.permission_level is not PermissionLevel.AUTOMATIC
                 or tool.effect is not ToolEffect.READ
             ):
                 raise ValueError(
                     f"tool '{tool.name}' is not an automatic read-only tool"
+                )
+            if tool.name in proposal_tool_names and not proposal_only_level_two:
+                raise ValueError(
+                    f"proposal tool '{tool.name}' has an invalid permission or effect"
                 )
             description = getattr(tool, "description", None)
             if (
@@ -146,7 +179,17 @@ class ProviderToolPolicy(BaseModel):
                 raise ValueError(
                     f"tool '{tool.name}' must declare a nonblank bounded description"
                 )
-            parameters = tool.arguments_model.model_json_schema()
+            if proposal_only_level_two:
+                arguments_model = getattr(tool, "proposal_arguments_model", None)
+                if not isinstance(arguments_model, type) or not issubclass(
+                    arguments_model, BaseModel
+                ):
+                    raise ValueError(
+                        f"proposal tool '{tool.name}' must declare a proposal arguments model"
+                    )
+            else:
+                arguments_model = tool.arguments_model
+            parameters = arguments_model.model_json_schema()
             if parameters.get("type") != "object":
                 raise ValueError(
                     f"tool '{tool.name}' arguments schema must be a JSON object"

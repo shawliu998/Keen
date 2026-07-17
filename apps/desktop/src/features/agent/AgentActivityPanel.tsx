@@ -23,6 +23,9 @@ export type AgentActivityPanelProps = {
   onCancel?: () => void;
   onUndo?: (mutationId: string) => void;
   onRedo?: (mutationId: string) => void;
+  approvalAction?: { pending: { approvalId: string; action: "confirm" | "reject" } | null; error: string | null };
+  onConfirmApproval?: (approvalId: string) => void;
+  onRejectApproval?: (approvalId: string) => void;
 };
 
 const statusCopy: Record<AgentActivityStatus, { label: string; description: string }> = {
@@ -30,7 +33,7 @@ const statusCopy: Record<AgentActivityStatus, { label: string; description: stri
   queued: { label: "Queued", description: "The run is waiting for the local learning service." },
   running: { label: "Running", description: "The Agent is working. Activity appears as it is recorded." },
   partial: { label: "Reconnecting", description: "The live connection was interrupted. Recorded partial output is preserved while Keen reconnects." },
-  waiting_approval: { label: "Waiting for confirmation", description: "This run is paused. Confirmation is read-only here; no action can be approved from this panel." },
+  waiting_approval: { label: "Waiting for confirmation", description: "This run is paused until you confirm or reject the requested local task completion." },
   completed: { label: "Completed", description: "The Agent run completed and its recorded output is shown below." },
   failed: { label: "Failed", description: "The Agent run stopped before completion. Existing partial output is preserved." },
   cancelled: { label: "Cancelled", description: "The Agent run was cancelled. Existing partial output is preserved." },
@@ -111,6 +114,9 @@ export function AgentActivityPanel({
   onCancel,
   onUndo,
   onRedo,
+  approvalAction,
+  onConfirmApproval,
+  onRejectApproval,
 }: AgentActivityPanelProps) {
   const override = viewStateCopy[viewState];
   const status = override ?? statusCopy[state.status];
@@ -151,6 +157,24 @@ export function AgentActivityPanel({
           <p>{state.error.message ?? "The Agent did not provide more error detail."}</p>
           <small>{state.error.retryable ? "This error may be retried." : "Retry is not currently available for this error."}</small>
         </div>
+      ) : null}
+
+      {state.status === "waiting_approval" ? (
+        state.pendingApproval ? (() => {
+          const pending = approvalAction?.pending?.approvalId === state.pendingApproval!.approvalId ? approvalAction.pending : null;
+          const disabled = viewState === "offline" || pending !== null || onConfirmApproval === undefined || onRejectApproval === undefined;
+          return <section className="agent-activity-section agent-approval" aria-labelledby="agent-approval-title">
+            <h3 id="agent-approval-title">Confirm local change</h3>
+            <p><strong>{state.pendingApproval!.summary.title}</strong></p>
+            <dl><div><dt>Task</dt><dd>{state.pendingApproval!.summary.taskTitle}</dd></div><div><dt>Course</dt><dd>{state.pendingApproval!.summary.courseTitle}</dd></div><div><dt>Effect</dt><dd>{state.pendingApproval!.summary.effect}</dd></div></dl>
+            {viewState === "offline" ? <p className="agent-activity-action-error" role="alert">The learning service is offline, so this request cannot be sent. No task completion has been confirmed.</p> : null}
+            {approvalAction?.error ? <p className="agent-activity-action-error" role="alert">{approvalAction.error}</p> : null}
+            <div className="agent-approval-actions" aria-busy={pending !== null}>
+              <button type="button" className="agent-activity-action" disabled={disabled} aria-busy={pending?.action === "confirm"} onClick={() => onConfirmApproval?.(state.pendingApproval!.approvalId)}>{pending?.action === "confirm" ? "Confirming…" : "Confirm"}</button>
+              <button type="button" className="agent-activity-action" disabled={disabled} aria-busy={pending?.action === "reject"} onClick={() => onRejectApproval?.(state.pendingApproval!.approvalId)}>{pending?.action === "reject" ? "Rejecting…" : "Reject"}</button>
+            </div>
+          </section>;
+        })() : <section className="agent-activity-section" role="status"><h3>Confirmation details unavailable</h3><p className="agent-activity-empty">The run is waiting for confirmation, but its recorded request is unavailable. Refresh the local service state before taking action.</p></section>
       ) : null}
 
       <div className="agent-activity-content" aria-label="Agent response">

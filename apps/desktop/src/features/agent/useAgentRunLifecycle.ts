@@ -1,6 +1,7 @@
 import {
   LearningCoreResponseError,
   type AgentMutationActionResponse,
+  type AgentLevel2ApprovalResponse,
   type AgentRun,
   type AgentRunCreateRequest,
   type AgentRunEvent,
@@ -32,17 +33,26 @@ export type AgentMutationActionState = {
   lastResult: Pick<AgentMutationActionResponse, "action" | "targetMutationId" | "replayed"> | null;
 };
 
+export type AgentApprovalActionState = {
+  pending: { approvalId: string; action: "confirm" | "reject" } | null;
+  error: AgentRuntimeIssue | null;
+  lastResult: Pick<AgentLevel2ApprovalResponse, "approvalId" | "resolution" | "replayed"> | null;
+};
+
 export type AgentRuntimeContextValue = {
   activity: AgentActivityState;
   run: AgentRun | null;
   phase: AgentRuntimePhase;
   issue: AgentRuntimeIssue | null;
   mutationAction: AgentMutationActionState;
+  approvalAction?: AgentApprovalActionState;
   learningCoreStatus: LearningCoreStatus;
   startRun: (request: AgentRunStartRequest) => Promise<AgentRun | null>;
   cancelRun: () => Promise<boolean>;
   undoMutation: (mutationId: string) => Promise<boolean>;
   redoMutation: (mutationId: string) => Promise<boolean>;
+  confirmApproval?: (approvalId: string) => Promise<boolean>;
+  rejectApproval?: (approvalId: string) => Promise<boolean>;
 };
 
 export const AGENT_STREAM_RETRY_DELAY_MS = 350;
@@ -187,6 +197,30 @@ export function mutationIssue(error?: LearningCoreResponseError): AgentRuntimeIs
     message: "Keen could not confirm the requested mutation action, so no Undo or Redo result is shown.",
     retryable: error?.detail?.retryable ?? false,
     recovery: "Review the current run state before trying the action again.",
+    automaticRecovery: false,
+  };
+}
+
+export function approvalIssue(
+  error?: LearningCoreResponseError,
+  action: "confirm" | "reject" = "confirm",
+): AgentRuntimeIssue {
+  if (error?.detail?.code === "approval_conflict") {
+    return {
+      code: "run_failed",
+      message: "This approval was resolved by a different request, so Keen did not submit another local change.",
+      retryable: false,
+      recovery: "Refresh the Agent activity to load the recorded approval result before taking another action.",
+      automaticRecovery: false,
+    };
+  }
+  return {
+    code: error?.detail?.code === "agent_busy" ? "agent_busy" : "run_failed",
+    message: action === "confirm"
+      ? "Keen could not confirm this approval request. The requested study-task change was not confirmed as executed."
+      : "Keen could not reject this approval request. The request may still be pending.",
+    retryable: error?.detail?.retryable ?? true,
+    recovery: "Check the local service and retry; Keen will reuse the same approval request key until its result is known.",
     automaticRecovery: false,
   };
 }

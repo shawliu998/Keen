@@ -27,7 +27,10 @@ from app.agent.tools import (
     register_initial_product_tools,
     register_readonly_product_tools,
 )
-from app.agent.tools.product import ListStudyFeedOutput
+from app.agent.tools.product import (
+    CompleteStudyTaskProposalArguments,
+    ListStudyFeedOutput,
+)
 from app.agent.provider import ProviderRequest
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
@@ -429,6 +432,42 @@ def test_runtime_capability_cannot_bind_level_two_registry() -> None:
 
     with pytest.raises(ValueError, match="read-only"):
         ProviderToolRuntime.from_readonly_registry(registry, executor)
+
+
+def test_runtime_capability_requires_an_explicit_closed_proposal_allowlist() -> None:
+    registry = _readonly_registry()
+    registry.register(CompleteStudyTaskTool())
+    executor = AgentStepExecutor(registry, _UnusedAuditSink())
+
+    runtime = ProviderToolRuntime.from_registry_with_proposals(
+        registry,
+        executor,
+        proposal_tool_names=frozenset({"complete_study_task"}),
+    )
+    assert runtime.proposal_tool_names == frozenset({"complete_study_task"})
+    proposal = next(
+        spec for spec in runtime.catalog if spec.name == "complete_study_task"
+    )
+    assert set(proposal.parameters["properties"]) == {
+        "task_id",
+        "expected_revision",
+    }
+
+    with pytest.raises(ValueError, match="only the closed"):
+        ProviderToolRuntime.from_registry_with_proposals(
+            registry,
+            executor,
+            proposal_tool_names=frozenset({"list_study_feed"}),
+        )
+
+
+@pytest.mark.parametrize("revision", [True, 1.0, "1"])
+def test_level_two_proposal_revision_is_a_strict_sqlite_integer(revision) -> None:
+    with pytest.raises(ValueError):
+        CompleteStudyTaskProposalArguments(
+            task_id="task-chain-rule",
+            expected_revision=revision,
+        )
 
 
 def test_runtime_capability_cannot_be_rebound_or_subclassed() -> None:

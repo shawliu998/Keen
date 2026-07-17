@@ -1,4 +1,4 @@
-import type { AgentRunEvent, AgentRunStatus } from "@keen/api-client";
+import type { AgentLevel2PendingApproval, AgentRunEvent, AgentRunStatus } from "@keen/api-client";
 
 export type AgentActivityStatus = AgentRunStatus | "idle" | "partial";
 
@@ -38,11 +38,13 @@ export type AgentActivityState = {
   tools: readonly AgentToolActivity[];
   mutations: readonly AgentMutationActivity[];
   warnings: readonly AgentWarningActivity[];
+  pendingApproval?: AgentLevel2PendingApproval | null;
   error: { code: string; message: string | null; retryable: boolean } | null;
 };
 
 export type AgentActivityAction =
   | { type: "reset" }
   | { type: "run_status"; status: AgentRunStatus }
+  | { type: "pending_approval"; approval: AgentLevel2PendingApproval | null }
   | { type: "event"; event: AgentRunEvent }
   | { type: "stream_disconnected" };

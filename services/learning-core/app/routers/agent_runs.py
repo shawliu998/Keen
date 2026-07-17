@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Literal, cast
@@ -19,6 +20,12 @@ from ..services.agent_runtime import (
     AgentProviderMissingError,
     AgentProviderUnavailableError,
     AgentRuntimeManager,
+)
+from ..services.level2_approval import (
+    Level2ApprovalConflictError,
+    Level2ApprovalNotFoundError,
+    Level2ApprovalResult,
+    Level2ApprovalService,
 )
 
 _IDENTIFIER = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
@@ -90,14 +97,57 @@ class AgentCancelResponse(ApiModel):
     run: AgentRunResponse
 
 
+class Level2ApprovalSummaryResponse(ApiModel):
+    title: str = Field(min_length=1, max_length=300)
+    task_title: str = Field(alias="taskTitle", min_length=1, max_length=500)
+    course_title: str = Field(alias="courseTitle", min_length=1, max_length=300)
+    effect: str = Field(min_length=1, max_length=1_000)
+
+
+class Level2ApprovalResponse(ApiModel):
+    approval_id: str = Field(alias="approvalId", pattern=_IDENTIFIER)
+    tool_name: Literal["complete_study_task"] = Field(alias="toolName")
+    summary: Level2ApprovalSummaryResponse
+
+
+class Level2ApprovalResolveRequest(ApiModel):
+    idempotency_key: str = Field(
+        alias="idempotencyKey",
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+    )
+
+
+class Level2ApprovalResolveResponse(ApiModel):
+    run: AgentRunResponse
+    approval_id: str = Field(alias="approvalId", pattern=_IDENTIFIER)
+    resolution: Literal["confirmed", "rejected", "expired"]
+    replayed: bool
+
+
+class PendingLevel2ApprovalsResponse(ApiModel):
+    run: AgentRunResponse
+    approvals: list[Level2ApprovalResponse]
+
+
 def _manager(request: Request) -> AgentRuntimeManager:
     return request.app.state.agent_runtime
+
+
+def _approval_service(request: Request) -> Level2ApprovalService:
+    return Level2ApprovalService(request.app.state.database)
 
 
 def _run_response(run: dict) -> AgentRunResponse:
     return AgentRunResponse.model_validate(
         {field_name: run[field_name] for field_name in AgentRunResponse.model_fields}
     )
+
+
+def _validate_path_identifier(value: str, *, label: str) -> None:
+    if re.fullmatch(_IDENTIFIER, value) is None:
+        raise HTTPException(status_code=422, detail=f"invalid {label}")
 
 
 router = APIRouter(prefix="/v1/agent/runs", tags=["agent"])
@@ -175,6 +225,135 @@ async def cancel_agent_run(request: Request, run_id: str) -> AgentCancelResponse
     return AgentCancelResponse(accepted=accepted, run=_run_response(run))
 
 
+@router.get(
+    "/{run_id}/level2-actions/pending",
+    response_model=PendingLevel2ApprovalsResponse,
+)
+def list_pending_level2_actions(
+    request: Request, run_id: str
+) -> PendingLevel2ApprovalsResponse:
+    _validate_path_identifier(run_id, label="Agent run ID")
+    run = _manager(request).get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return PendingLevel2ApprovalsResponse(
+        run=_run_response(run),
+        approvals=[
+            Level2ApprovalResponse.model_validate(item)
+            for item in _approval_service(request).list_pending(run_id=run_id)
+        ],
+    )
+
+
+def _approval_response(
+    request: Request, result: Level2ApprovalResult
+) -> Level2ApprovalResolveResponse:
+    run = _manager(request).get_run(result.run_id)
+    if run is None:  # pragma: no cover - resolution has a foreign-key run
+        raise RuntimeError("resolved Agent run disappeared")
+    return Level2ApprovalResolveResponse(
+        run=_run_response(run),
+        approval_id=result.approval_id,
+        resolution=(
+            "expired"
+            if result.status == "expired"
+            else "confirmed"
+            if result.resolution == "confirm"
+            else "rejected"
+        ),
+        replayed=result.replayed,
+    )
+
+
+async def _resolve_level2_action(
+    request: Request,
+    *,
+    run_id: str,
+    approval_id: str,
+    resolution: Literal["confirm", "reject"],
+    payload: Level2ApprovalResolveRequest,
+) -> Level2ApprovalResolveResponse:
+    _validate_path_identifier(run_id, label="Agent run ID")
+    _validate_path_identifier(approval_id, label="Level 2 approval ID")
+    try:
+        result = await _approval_service(request).resolve(
+            run_id=run_id,
+            approval_id=approval_id,
+            resolution=resolution,
+            idempotency_key=payload.idempotency_key,
+        )
+    except Level2ApprovalNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Level 2 approval was not found"
+        ) from None
+    except Level2ApprovalConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "approval_conflict",
+                "message": (
+                    f"{error}. This request made no additional study-task change."
+                ),
+                "retryable": False,
+                "automaticRecovery": False,
+                "recoveryAction": "Refresh the Agent activity before trying another approval action.",
+            },
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "approval_action_failed",
+                "message": (
+                    "Keen could not safely determine whether the local approval "
+                    "action committed. No automatic recovery was attempted."
+                ),
+                "retryable": True,
+                "automaticRecovery": False,
+                "recoveryAction": "Refresh the Agent activity and retry with the same idempotency key.",
+            },
+        ) from None
+    return _approval_response(request, result)
+
+
+@router.post(
+    "/{run_id}/level2-actions/{approval_id}/confirm",
+    response_model=Level2ApprovalResolveResponse,
+)
+async def confirm_level2_action(
+    request: Request,
+    run_id: str,
+    approval_id: str,
+    payload: Level2ApprovalResolveRequest,
+) -> Level2ApprovalResolveResponse:
+    return await _resolve_level2_action(
+        request,
+        run_id=run_id,
+        approval_id=approval_id,
+        resolution="confirm",
+        payload=payload,
+    )
+
+
+@router.post(
+    "/{run_id}/level2-actions/{approval_id}/reject",
+    response_model=Level2ApprovalResolveResponse,
+)
+async def reject_level2_action(
+    request: Request,
+    run_id: str,
+    approval_id: str,
+    payload: Level2ApprovalResolveRequest,
+) -> Level2ApprovalResolveResponse:
+    return await _resolve_level2_action(
+        request,
+        run_id=run_id,
+        approval_id=approval_id,
+        resolution="reject",
+        payload=payload,
+    )
+
+
 @router.get("/{run_id}/events")
 async def stream_agent_events(
     request: Request,
@@ -245,5 +424,9 @@ __all__ = [
     "AgentCancelResponse",
     "AgentRunCreateRequest",
     "AgentRunResponse",
+    "Level2ApprovalResolveRequest",
+    "Level2ApprovalResolveResponse",
+    "Level2ApprovalResponse",
+    "PendingLevel2ApprovalsResponse",
     "router",
 ]

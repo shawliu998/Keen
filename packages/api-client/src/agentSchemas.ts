@@ -123,6 +123,35 @@ export const agentMutationActionRequestSchema = z.object({
   idempotencyKey: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/),
 }).strict();
 
+export const agentLevel2ApprovalSummarySchema = z.object({
+  title: z.string().min(1).max(300),
+  taskTitle: z.string().min(1).max(500),
+  courseTitle: z.string().min(1).max(300),
+  effect: z.string().min(1).max(1_000),
+}).strict();
+
+export const agentLevel2PendingApprovalSchema = z.object({
+  approvalId: agentIdentifierSchema,
+  toolName: z.literal("complete_study_task"),
+  summary: agentLevel2ApprovalSummarySchema,
+}).strict();
+
+export const agentLevel2ApprovalRequestSchema = z.object({
+  idempotencyKey: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/),
+}).strict();
+
+export const agentLevel2ApprovalResponseSchema = z.object({
+  run: agentRunSchema,
+  approvalId: agentIdentifierSchema,
+  resolution: z.enum(["confirmed", "rejected", "expired"]),
+  replayed: z.boolean(),
+}).strict();
+
+export const agentLevel2PendingActionsResponseSchema = z.object({
+  run: agentRunSchema,
+  approvals: z.array(agentLevel2PendingApprovalSchema).max(100),
+}).strict();
+
 export const agentMutationActionResponseSchema = z.object({
   action: z.enum(["undo", "redo"]),
   runId: agentIdentifierSchema,
@@ -194,7 +223,24 @@ const agentEventDataSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("content_delta"), data: z.object({ delta: z.string().min(1).max(16_384) }).strict() }).strict(),
   z.object({
     type: z.literal("checkpoint"),
-    data: z.object({ label: z.string().min(1).max(200), data: agentJsonObjectSchema }).strict(),
+    data: z.union([
+      z.object({ label: z.literal("approval_requested"), data: agentLevel2PendingApprovalSchema }).strict(),
+      z.object({
+        label: z.literal("approval_resolved"),
+        data: z.object({
+          approvalId: agentIdentifierSchema,
+          status: z.enum(["approved", "denied", "cancelled", "expired"]),
+          executionInvocationId: agentIdentifierSchema.optional(),
+        }).strict(),
+      }).strict(),
+      z.object({
+        label: z.string().min(1).max(200).refine(
+          (label) => label !== "approval_requested" && label !== "approval_resolved",
+          "Approval checkpoint labels require the Level 2 approval contract.",
+        ),
+        data: agentJsonObjectSchema,
+      }).strict(),
+    ]),
   }).strict(),
   z.object({
     type: z.literal("state_mutation"),
@@ -264,4 +310,8 @@ export type AgentRun = z.infer<typeof agentRunSchema>;
 export type AgentCancelResponse = z.infer<typeof agentCancelResponseSchema>;
 export type AgentMutationActionRequest = z.infer<typeof agentMutationActionRequestSchema>;
 export type AgentMutationActionResponse = z.infer<typeof agentMutationActionResponseSchema>;
+export type AgentLevel2PendingApproval = z.infer<typeof agentLevel2PendingApprovalSchema>;
+export type AgentLevel2ApprovalRequest = z.infer<typeof agentLevel2ApprovalRequestSchema>;
+export type AgentLevel2ApprovalResponse = z.infer<typeof agentLevel2ApprovalResponseSchema>;
+export type AgentLevel2PendingActionsResponse = z.infer<typeof agentLevel2PendingActionsResponseSchema>;
 export type AgentRunEvent = z.infer<typeof agentRunEventSchema>;

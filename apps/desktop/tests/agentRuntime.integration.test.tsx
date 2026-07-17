@@ -4,6 +4,8 @@ import {
   AgentEventStreamDisconnectedError,
   LearningCoreResponseError,
   type AgentCancelResponse,
+  type AgentLevel2ApprovalResponse,
+  type AgentLevel2PendingActionsResponse,
   type AgentMutationActionResponse,
   type AgentRun,
   type AgentRunCreateRequest,
@@ -68,6 +70,9 @@ type MockClient = {
   agentRunEvents: ReturnType<typeof vi.fn>;
   undoAgentMutation: ReturnType<typeof vi.fn>;
   redoAgentMutation: ReturnType<typeof vi.fn>;
+  getPendingLevel2Actions: ReturnType<typeof vi.fn>;
+  confirmLevel2Action: ReturnType<typeof vi.fn>;
+  rejectLevel2Action: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(overrides: Partial<{
@@ -77,6 +82,9 @@ function makeClient(overrides: Partial<{
   agentRunEvents: (runId: string, options?: AgentRunEventStreamOptions) => AsyncGenerator<AgentRunEvent>;
   undoAgentMutation: LearningCoreClient["undoAgentMutation"];
   redoAgentMutation: LearningCoreClient["redoAgentMutation"];
+  getPendingLevel2Actions: (runId: string, options?: RequestOptions) => Promise<AgentLevel2PendingActionsResponse>;
+  confirmLevel2Action: LearningCoreClient["confirmLevel2Action"];
+  rejectLevel2Action: LearningCoreClient["rejectLevel2Action"];
 }> = {}): MockClient {
   let getAttempt = 0;
   const createAgentRun = vi.fn(overrides.createAgentRun ?? (async () => run("queued")));
@@ -91,6 +99,9 @@ function makeClient(overrides: Partial<{
   ])));
   const undoAgentMutation = vi.fn(overrides.undoAgentMutation ?? (async (runId: string, mutationId: string) => mutationResult("undo", runId, mutationId, false)));
   const redoAgentMutation = vi.fn(overrides.redoAgentMutation ?? (async (runId: string, mutationId: string) => mutationResult("redo", runId, mutationId, false)));
+  const getPendingLevel2Actions = vi.fn(overrides.getPendingLevel2Actions ?? (async () => ({ run: run("waiting_approval"), approvals: [] })));
+  const confirmLevel2Action = vi.fn(overrides.confirmLevel2Action ?? (async (runId: string, approvalId: string) => approvalResult(runId, approvalId, "confirmed")));
+  const rejectLevel2Action = vi.fn(overrides.rejectLevel2Action ?? (async (runId: string, approvalId: string) => approvalResult(runId, approvalId, "rejected")));
   const client = {
     createAgentRun,
     getAgentRun,
@@ -98,8 +109,11 @@ function makeClient(overrides: Partial<{
     agentRunEvents,
     undoAgentMutation,
     redoAgentMutation,
+    getPendingLevel2Actions,
+    confirmLevel2Action,
+    rejectLevel2Action,
   } as unknown as LearningCoreClient;
-  return { client, createAgentRun, getAgentRun, cancelAgentRun, agentRunEvents, undoAgentMutation, redoAgentMutation };
+  return { client, createAgentRun, getAgentRun, cancelAgentRun, agentRunEvents, undoAgentMutation, redoAgentMutation, getPendingLevel2Actions, confirmLevel2Action, rejectLevel2Action };
 }
 
 function mutationResult(
@@ -121,6 +135,30 @@ function mutationResult(
   };
 }
 
+function approvalResult(
+  runId: string,
+  approvalId: string,
+  resolution: "confirmed" | "rejected" | "expired",
+  status: AgentRun["status"] = resolution === "confirmed"
+    ? "completed"
+    : resolution === "rejected"
+      ? "cancelled"
+      : "failed",
+): AgentLevel2ApprovalResponse {
+  return { run: run(status, runId), approvalId, resolution, replayed: false };
+}
+
+const pendingApproval = {
+  approvalId: "approval-1",
+  toolName: "complete_study_task" as const,
+  summary: {
+    title: "Complete local task",
+    taskTitle: "Read chapter",
+    courseTitle: "Physics",
+    effect: "Marks the local task complete.",
+  },
+};
+
 function Harness() {
   const runtime = useAgentRuntime();
   return <>
@@ -128,6 +166,8 @@ function Harness() {
     <button onClick={() => void runtime.cancelRun()}>Cancel run</button>
     <button onClick={() => void runtime.undoMutation("mutation-1")}>Undo mutation</button>
     <button onClick={() => void runtime.redoMutation("mutation-1")}>Redo mutation</button>
+    <button onClick={() => void runtime.confirmApproval?.("approval-1")}>Confirm approval</button>
+    <button onClick={() => void runtime.rejectApproval?.("approval-1")}>Reject approval</button>
     <output data-testid="runtime">{JSON.stringify({
       phase: runtime.phase,
       status: runtime.activity.status,
@@ -136,6 +176,9 @@ function Harness() {
       mutations: runtime.activity.mutations,
       issue: runtime.issue,
       mutationAction: runtime.mutationAction,
+      run: runtime.run,
+      pendingApproval: runtime.activity.pendingApproval,
+      approvalAction: runtime.approvalAction,
     })}</output>
   </>;
 }
@@ -318,6 +361,157 @@ describe("AgentRuntimeProvider", () => {
     await waitFor(() => expect(runtimeText()).toContain('"status":"cancelled"'));
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(mock.cancelAgentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers a waiting approval through the pending endpoint without exposing proposal arguments", async () => {
+    const mock = makeClient({
+      getAgentRun: async () => run("waiting_approval"),
+      getPendingLevel2Actions: async () => ({ run: run("waiting_approval"), approvals: [pendingApproval] }),
+      agentRunEvents: () => eventStream([]),
+    });
+    setClient(mock);
+    render(<Runtime />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(mock.getPendingLevel2Actions).toHaveBeenCalledWith("run-1", expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    await waitFor(() => expect(runtimeText()).toContain('"pendingApproval":{"approvalId":"approval-1"'));
+    expect(runtimeText()).toContain('"status":"waiting_approval"');
+    expect(runtimeText()).not.toContain("expectedRevision");
+    expect(runtimeText()).not.toContain("taskId");
+  });
+
+  it("uses one approval resolution flight, updates the authoritative run, and resumes SSE audit events", async () => {
+    let firstStream = true;
+    let completed = false;
+    const mock = makeClient({
+      getAgentRun: async () => run(completed ? "completed" : "waiting_approval"),
+      getPendingLevel2Actions: async () => ({ run: run("waiting_approval"), approvals: [pendingApproval] }),
+      confirmLevel2Action: async (runId, approvalId) => {
+        completed = true;
+        return approvalResult(runId, approvalId, "confirmed");
+      },
+      agentRunEvents: (_runId, options) => {
+        if (firstStream) {
+          firstStream = false;
+          return (async function* () {
+            yield { id: "approval-requested", type: "checkpoint", data: { label: "approval_requested", data: pendingApproval } } as AgentRunEvent;
+            await new Promise<void>((_resolve, reject) => options?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
+          })();
+        }
+        expect(options?.lastEventId).toBe("approval-requested");
+        return eventStream([
+          { id: "approval-resolved", type: "checkpoint", data: { label: "approval_resolved", data: { approvalId: "approval-1", status: "approved", executionInvocationId: "invocation-1" } } },
+          { id: "mutation-1", type: "state_mutation", data: { callId: "call-1", invocationId: "invocation-1", mutationId: "mutation-1", entityType: "study_task", entityId: "task-1", operation: "update", reversible: true } },
+          { id: "done-1", type: "done", data: { status: "completed" } },
+        ]);
+      },
+    });
+    setClient(mock);
+    render(<Runtime />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(runtimeText()).toContain('"pendingApproval":{"approvalId":"approval-1"'));
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    await waitFor(() => expect(mock.confirmLevel2Action).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtimeText()).toContain('"status":"completed"'));
+    await waitFor(() => expect(runtimeText()).toContain('"mutationCount":1'));
+    expect(mock.rejectLevel2Action).not.toHaveBeenCalled();
+    expect(mock.agentRunEvents).toHaveBeenCalledTimes(2);
+    expect(runtimeText()).toContain('"lastResult":{"approvalId":"approval-1","resolution":"confirmed","replayed":false}');
+  });
+
+  it("keeps one confirmation in flight even if confirm and reject are both pressed", async () => {
+    let resolveConfirmation!: (result: AgentLevel2ApprovalResponse) => void;
+    const confirmation = new Promise<AgentLevel2ApprovalResponse>((resolve) => { resolveConfirmation = resolve; });
+    const mock = makeClient({
+      getAgentRun: async () => run("waiting_approval"),
+      getPendingLevel2Actions: async () => ({ run: run("waiting_approval"), approvals: [pendingApproval] }),
+      confirmLevel2Action: () => confirmation,
+      agentRunEvents: () => eventStream([]),
+    });
+    setClient(mock);
+    render(<Runtime />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(runtimeText()).toContain('"pendingApproval":{"approvalId":"approval-1"'));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reject approval" }));
+    await waitFor(() => expect(mock.confirmLevel2Action).toHaveBeenCalledTimes(1));
+    expect(mock.rejectLevel2Action).not.toHaveBeenCalled();
+    resolveConfirmation(approvalResult("run-1", "approval-1", "confirmed"));
+    await waitFor(() => expect(runtimeText()).toContain('"resolution":"confirmed"'));
+  });
+
+  it("records an expired confirmation as a failed run rather than executed work", async () => {
+    const mock = makeClient({
+      getAgentRun: async () => run("waiting_approval"),
+      getPendingLevel2Actions: async () => ({ run: run("waiting_approval"), approvals: [pendingApproval] }),
+      confirmLevel2Action: async (runId, approvalId) => approvalResult(runId, approvalId, "expired"),
+      agentRunEvents: () => eventStream([]),
+    });
+    setClient(mock);
+    render(<Runtime />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(runtimeText()).toContain('"pendingApproval":{"approvalId":"approval-1"'));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    await waitFor(() => expect(runtimeText()).toContain('"status":"failed"'));
+    expect(runtimeText()).toContain('"resolution":"expired"');
+    expect(runtimeText()).toContain('"mutationCount":0');
+  });
+
+  it("retries an unknown confirmation result with the same idempotency key", async () => {
+    let attempt = 0;
+    const mock = makeClient({
+      getAgentRun: async () => run("waiting_approval"),
+      getPendingLevel2Actions: async () => ({ run: run("waiting_approval"), approvals: [pendingApproval] }),
+      confirmLevel2Action: async (runId, approvalId) => {
+        attempt += 1;
+        if (attempt === 1) throw new TypeError("network connection closed before a result was known");
+        return approvalResult(runId, approvalId, "confirmed");
+      },
+      agentRunEvents: () => eventStream([]),
+    });
+    setClient(mock);
+    render(<Runtime />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(runtimeText()).toContain('"pendingApproval":{"approvalId":"approval-1"'));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    await waitFor(() => expect(runtimeText()).toContain("Keen could not confirm this approval request"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    await waitFor(() => expect(mock.confirmLevel2Action).toHaveBeenCalledTimes(2));
+    const firstRequest = mock.confirmLevel2Action.mock.calls[0]?.[2] as { idempotencyKey: string };
+    const secondRequest = mock.confirmLevel2Action.mock.calls[1]?.[2] as { idempotencyKey: string };
+    expect(firstRequest.idempotencyKey).toBe(secondRequest.idempotencyKey);
+  });
+
+  it("reports an approval conflict as non-retryable without leaking backend detail", async () => {
+    const conflict = new LearningCoreResponseError(409, {
+      message: "private database detail /Users/private/keen.db",
+      retryable: false,
+      recovery: "Refresh the run.",
+      documentId: null,
+      code: "approval_conflict",
+    }, null);
+    const mock = makeClient({
+      getAgentRun: async () => run("waiting_approval"),
+      getPendingLevel2Actions: async () => ({ run: run("waiting_approval"), approvals: [pendingApproval] }),
+      confirmLevel2Action: async () => { throw conflict; },
+      agentRunEvents: () => eventStream([]),
+    });
+    setClient(mock);
+    render(<Runtime />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(runtimeText()).toContain('"pendingApproval":{"approvalId":"approval-1"'));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    await waitFor(() => expect(runtimeText()).toContain("resolved by a different request"));
+    expect(runtimeText()).toContain('"retryable":false');
+    expect(runtimeText()).toContain("Refresh the Agent activity");
+    expect(runtimeText()).not.toContain("reuse the same approval request key");
+    expect(runtimeText()).not.toContain("/Users/private/keen.db");
   });
 
   it("detaches and aborts local work on unmount without sending cancel", async () => {

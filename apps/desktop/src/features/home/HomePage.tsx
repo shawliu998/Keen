@@ -125,6 +125,12 @@ export function HomePage() {
           onCancel={() => { void runtime.cancelRun(); }}
           onUndo={undo}
           onRedo={redo}
+          approvalAction={{
+            pending: runtime.approvalAction?.pending ?? null,
+            error: runtime.approvalAction?.error ? `${runtime.approvalAction.error.message} ${runtime.approvalAction.error.recovery}` : null,
+          }}
+          onConfirmApproval={runtime.confirmApproval ? (approvalId) => { void runtime.confirmApproval?.(approvalId); } : undefined}
+          onRejectApproval={runtime.rejectApproval ? (approvalId) => { void runtime.rejectApproval?.(approvalId); } : undefined}
         />
       </div> : null}
       <section className="home-section"><div className="home-section-head"><div><Sparkles size={16} /><h2>Proactive Learning Feed</h2><Badge tone="warning">Sample · 3 for today</Badge></div><button onClick={() => navigate("/feed")}>View all <ArrowRight size={14} /></button></div>

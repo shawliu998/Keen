@@ -129,6 +129,12 @@
 .agent-activity-mutation span { margin-top: 3px; color: var(--text-tertiary); font-size: 9px; }
 .agent-activity-action { min-width: 62px; }
 .agent-activity-action-error { grid-column: 1 / -1; margin: 0; color: var(--danger); font-size: 9px; line-height: 1.4; }
+.agent-approval > p { margin: 0 0 10px; font-size: 11px; }
+.agent-approval dl { display: grid; gap: 7px; margin: 0; }
+.agent-approval dl div { display: grid; grid-template-columns: 52px 1fr; gap: 8px; color: var(--text-secondary); font-size: 10px; }
+.agent-approval dt { color: var(--text-tertiary); }
+.agent-approval dd { margin: 0; }
+.agent-approval-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 @media (max-width: 560px) {
   .agent-activity-mutation { grid-template-columns: 1fr; }

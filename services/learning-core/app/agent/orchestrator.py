@@ -75,13 +75,27 @@ class StepExecutor(Protocol):
     ) -> ToolResult | ToolReplayResult: ...
 
 
-class ProviderToolRuntime:
-    """One inseparable provider catalog, allowlist, and read-only executor."""
+class Level2Proposer(Protocol):
+    async def propose(
+        self,
+        *,
+        run_id: str,
+        call_id: str,
+        arguments: Mapping[str, object],
+    ) -> str: ...
 
-    __slots__ = ("_executor", "_frozen", "_policy")
+
+class _ApprovalRequested:
+    pass
+
+
+class ProviderToolRuntime:
+    """One inseparable provider catalog, allowlist, and constrained executor."""
+
+    __slots__ = ("_executor", "_frozen", "_policy", "_proposal_tool_names")
 
     def __init__(self) -> None:
-        raise TypeError("ProviderToolRuntime must be derived from a read-only registry")
+        raise TypeError("ProviderToolRuntime must be derived from a validated registry")
 
     def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_frozen", False):
@@ -105,6 +119,36 @@ class ProviderToolRuntime:
         object.__setattr__(
             runtime, "_policy", ProviderToolPolicy.from_readonly_registry(registry)
         )
+        object.__setattr__(runtime, "_proposal_tool_names", frozenset())
+        object.__setattr__(runtime, "_frozen", True)
+        return runtime
+
+    @classmethod
+    def from_registry_with_proposals(
+        cls,
+        registry: ToolRegistry,
+        executor: AgentStepExecutor,
+        *,
+        proposal_tool_names: frozenset[str],
+    ) -> ProviderToolRuntime:
+        if cls is not ProviderToolRuntime:
+            raise TypeError("provider tool runtime subclasses are not supported")
+        if type(executor) is not AgentStepExecutor or not executor.is_bound_to(
+            registry, require_non_transactional=True
+        ):
+            raise ValueError(
+                "provider tool runtime requires the same non-transactional registry executor"
+            )
+        runtime = object.__new__(cls)
+        object.__setattr__(runtime, "_executor", executor)
+        object.__setattr__(
+            runtime,
+            "_policy",
+            ProviderToolPolicy.from_registry_with_proposals(
+                registry, proposal_tool_names=proposal_tool_names
+            ),
+        )
+        object.__setattr__(runtime, "_proposal_tool_names", proposal_tool_names)
         object.__setattr__(runtime, "_frozen", True)
         return runtime
 
@@ -119,6 +163,10 @@ class ProviderToolRuntime:
     @property
     def allowed_tool_names(self) -> frozenset[str]:
         return self._policy.allowed_tool_names
+
+    @property
+    def proposal_tool_names(self) -> frozenset[str]:
+        return self._proposal_tool_names
 
 
 class _RecoverableToolErrorBudget:
@@ -163,6 +211,7 @@ class AgentOrchestrator:
         provider: AgentProvider,
         executor: StepExecutor | None = None,
         tool_runtime: ProviderToolRuntime | None = None,
+        level2_proposer: Level2Proposer | None = None,
     ) -> None:
         if executor is None and tool_runtime is None:
             raise ValueError("an Agent tool executor is required")
@@ -172,10 +221,17 @@ class AgentOrchestrator:
             raise ValueError("provider tool runtime must use the exact trusted type")
         self._event_store = event_store
         self._provider = provider
+        self._level2_proposer = level2_proposer
+        self._proposal_tool_names: frozenset[str] = frozenset()
         if tool_runtime is not None:
             self._executor = tool_runtime.executor
             self._tool_catalog = tool_runtime.catalog
             self._allowed_tool_names = tool_runtime.allowed_tool_names
+            self._proposal_tool_names = tool_runtime.proposal_tool_names
+            if self._proposal_tool_names and level2_proposer is None:
+                raise ValueError(
+                    "proposal-only Level 2 catalog requires a host proposer"
+                )
         elif type(provider) is FixedAutomationProvider:
             # Exact in-process fixtures may exercise their closed executor
             # registry in unit tests without exposing a provider catalog.
@@ -190,6 +246,8 @@ class AgentOrchestrator:
             self._executor = executor
             self._tool_catalog = ()
             self._allowed_tool_names = frozenset()
+        if level2_proposer is not None and not self._proposal_tool_names:
+            raise ValueError("host proposer requires an explicit proposal-only catalog")
         self._active: dict[str, asyncio.Event] = {}
         self._active_lock = asyncio.Lock()
 
@@ -224,6 +282,7 @@ class AgentOrchestrator:
                 tools=self._tool_catalog,
             )
             finished = False
+            waiting_for_approval = False
             ordinal = 0
             provider_bytes = 0
             content_bytes = 0
@@ -265,6 +324,9 @@ class AgentOrchestrator:
                     cancellation=cancellation,
                     recoverable_error_budget=recoverable_error_budget,
                 )
+                if isinstance(feedback, _ApprovalRequested):
+                    waiting_for_approval = True
+                    break
                 if feedback is not None:
                     feedback_bytes = len(
                         json.dumps(
@@ -283,7 +345,8 @@ class AgentOrchestrator:
                     cancellation_check(cancellation)
                     await self._submit_tool_result(feedback, cancellation)
             cancellation_check(cancellation)
-            self._event_store.finish_run(run_id, status="completed")
+            if not waiting_for_approval:
+                self._event_store.finish_run(run_id, status="completed")
         except asyncio.CancelledError:
             cancellation.set()
             if started:
@@ -337,7 +400,7 @@ class AgentOrchestrator:
         action: ProviderAction,
         cancellation: asyncio.Event,
         recoverable_error_budget: _RecoverableToolErrorBudget,
-    ) -> ProviderToolFeedback | None:
+    ) -> ProviderToolFeedback | _ApprovalRequested | None:
         cancellation_check(cancellation)
         if isinstance(action, ContentDelta):
             self._event_store.append(run_id, "content_delta", {"delta": action.text})
@@ -369,6 +432,62 @@ class AgentOrchestrator:
                 raise ProviderProtocolError(
                     "provider emitted a tool call but cannot accept its result"
                 )
+            if action.tool_name in self._proposal_tool_names:
+                if (
+                    self._level2_proposer is None
+                ):  # pragma: no cover - constructor invariant
+                    raise ProviderProtocolError(
+                        "proposal tool has no trusted host proposer"
+                    )
+                try:
+                    await self._level2_proposer.propose(
+                        run_id=run_id,
+                        call_id=action.call_id,
+                        arguments=action.arguments,
+                    )
+                except ToolArgumentValidationError:
+                    proposal_digest = hashlib.sha256(
+                        (run_id + "\0" + action.call_id).encode()
+                    ).hexdigest()
+                    invocation_id = f"inv-{proposal_digest}"
+                    step_id = f"step-{proposal_digest}"
+                    self._event_store.start_tool_step(
+                        run_id=run_id,
+                        step_id=step_id,
+                        ordinal=ordinal,
+                        invocation_id=invocation_id,
+                        tool_name=action.tool_name,
+                        input_data={
+                            "toolName": action.tool_name,
+                            "callId": action.call_id,
+                        },
+                    )
+                    feedback = ProviderToolError(
+                        call_id=action.call_id,
+                        tool_name=action.tool_name,
+                        invocation_id=invocation_id,
+                        code="invalid_arguments",
+                        category="validation",
+                        retryable=True,
+                        recovery_action="correct_arguments",
+                    )
+                    self._event_store.fail_tool_step_with_result(
+                        run_id=run_id,
+                        step_id=step_id,
+                        error_code=feedback.code,
+                        result_payload={
+                            "callId": action.call_id,
+                            "invocationId": invocation_id,
+                            "toolName": action.tool_name,
+                            "failed": True,
+                            "code": feedback.code,
+                            "retryable": feedback.retryable,
+                            "replayed": False,
+                        },
+                    )
+                    recoverable_error_budget.reserve(action=action, code=feedback.code)
+                    return feedback
+                return _ApprovalRequested()
             stable_digest = hashlib.sha256(
                 f"{run_id}\0{action.call_id}".encode("utf-8")
             ).hexdigest()

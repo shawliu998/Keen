@@ -1,23 +1,10 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import {
   AgentEventStreamDisconnectedError,
   LearningCoreResponseError,
   type AgentRun,
 } from "@keen/api-client";
-import {
-  agentActivityReducer,
-  initialAgentActivityState,
-} from "../features/agent/agentActivityReducer";
+import { agentActivityReducer, initialAgentActivityState } from "../features/agent/agentActivityReducer";
 import {
   AGENT_STREAM_RETRY_DELAY_MS,
   createAgentIdempotencyKey,
@@ -35,16 +22,12 @@ import {
   type AgentRuntimeIssue,
   type AgentRuntimePhase,
 } from "../features/agent/useAgentRunLifecycle";
+import { useAgentApprovalActions } from "../features/agent/useAgentApprovalActions";
 import { useLearningCore } from "./LearningCoreProvider";
 
-export type {
-  AgentMutationActionState,
-  AgentRunStartRequest,
-  AgentRuntimeContextValue,
-  AgentRuntimeIssue,
-  AgentRuntimeIssueCode,
-  AgentRuntimePhase,
-} from "../features/agent/useAgentRunLifecycle";
+export type { AgentMutationActionState, AgentApprovalActionState, AgentRunStartRequest,
+  AgentRuntimeContextValue, AgentRuntimeIssue, AgentRuntimeIssueCode,
+  AgentRuntimePhase } from "../features/agent/useAgentRunLifecycle";
 
 const AgentRuntimeContext = createContext<AgentRuntimeContextValue | null>(null);
 
@@ -77,13 +60,35 @@ export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
     setRun(nextRun);
   }, []);
 
+  const resumeAuthoritativeEvents = useCallback(() => {
+    streamCompleteRef.current = false;
+    setStreamRevision((revision) => revision + 1);
+  }, []);
+  const {
+    approvalAction,
+    abortApproval,
+    resetApproval,
+    confirmApproval,
+    rejectApproval,
+  } = useAgentApprovalActions({
+    client,
+    enabled: learningCoreStatus === "healthy",
+    activity,
+    activeRunRef: runRef,
+    mountedRef,
+    updateRun,
+    dispatch,
+    resumeAuthoritativeEvents,
+  });
+
   const abortLocalOperations = useCallback(() => {
     createAbortRef.current?.abort();
     getAbortRef.current?.abort();
     streamAbortRef.current?.abort();
     cancelAbortRef.current?.abort();
     mutationAbortRef.current?.abort();
-  }, []);
+    abortApproval();
+  }, [abortApproval]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -120,6 +125,7 @@ export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "reset" });
     setIssue(null);
     setMutationAction({ pending: null, error: null, lastResult: null });
+    resetApproval();
     setPhase("creating");
     const controller = new AbortController();
     createAbortRef.current = controller;
@@ -149,7 +155,7 @@ export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
       if (createAbortRef.current === controller) createAbortRef.current = null;
       creatingRef.current = false;
     }
-  }, [client, learningCoreStatus, phase, updateRun]);
+  }, [client, learningCoreStatus, phase, resetApproval, updateRun]);
 
   const cancelRun = useCallback(async (): Promise<boolean> => {
     const activeRun = runRef.current;
@@ -255,6 +261,11 @@ export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
           if (disposed || recoveryController.signal.aborted) return;
           updateRun(recovered);
           dispatch({ type: "run_status", status: recovered.status });
+          if (recovered.status === "waiting_approval") {
+            const pending = await client.getPendingLevel2Actions(runId, { signal: recoveryController.signal });
+            if (disposed || recoveryController.signal.aborted) return;
+            dispatch({ type: "pending_approval", approval: pending.approvals[0] ?? null });
+          }
           const terminalIssue = issueForTerminalRun(recovered);
           if (terminalIssue) setIssue(terminalIssue);
 
@@ -315,12 +326,15 @@ export function AgentRuntimeProvider({ children }: { children: ReactNode }) {
     phase,
     issue,
     mutationAction,
+    approvalAction,
     learningCoreStatus,
     startRun,
     cancelRun,
     undoMutation,
     redoMutation,
-  }), [activity, cancelRun, issue, learningCoreStatus, mutationAction, phase, redoMutation, run, startRun, undoMutation]);
+    confirmApproval,
+    rejectApproval,
+  }), [activity, approvalAction, cancelRun, confirmApproval, issue, learningCoreStatus, mutationAction, phase, redoMutation, rejectApproval, run, startRun, undoMutation]);
 
   return <AgentRuntimeContext.Provider value={value}>{children}</AgentRuntimeContext.Provider>;
 }

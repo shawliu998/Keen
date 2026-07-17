@@ -19,12 +19,14 @@ from ..agent.registry import ToolRegistry
 from ..agent.scope import resolve_course_scope
 from ..agent.sqlite_audit import SQLiteAuditSink
 from ..agent.tools.product import (
+    CompleteStudyTaskTool,
     register_initial_product_tools,
     register_readonly_product_tools,
 )
 from ..database import Database
 from ..repositories import JsonValue
 from ..repositories.agent_repository import AgentRepository
+from .level2_approval import Level2ApprovalService
 
 
 class AgentProviderFactory(Protocol):
@@ -77,6 +79,7 @@ class AgentRuntimeManager:
         self._database = database
         self._provider_factory = provider_factory
         self._event_store = AgentEventStore(database)
+        self._level2_approvals = Level2ApprovalService(database)
         self._lock = asyncio.Lock()
         self._active_run_id: str | None = None
         self._active_orchestrator: AgentOrchestrator | None = None
@@ -238,6 +241,12 @@ class AgentRuntimeManager:
             run = self.get_run(run_id)
             if run is None:
                 raise LookupError("agent run not found")
+            if run["status"] == "waiting_approval":
+                accepted = self._level2_approvals.cancel_waiting(run_id)
+                updated = self.get_run(run_id)
+                if updated is None:  # pragma: no cover - foreign key invariant
+                    raise RuntimeError("cancelled Agent run disappeared")
+                return accepted, updated
             if self._active_run_id != run_id:
                 return False, run
             orchestrator = self._active_orchestrator
@@ -348,9 +357,17 @@ class AgentRuntimeManager:
                             course_id=course_scope_id,
                             as_of=as_of,
                         )
+                        # The provider receives this exact tool as a proposal-only
+                        # catalog entry.  The non-transactional provider executor
+                        # can never execute it; the host approval service owns that.
+                        registry.register(CompleteStudyTaskTool())
                     executor = AgentStepExecutor(registry, sink)
                     tool_runtime = (
-                        ProviderToolRuntime.from_readonly_registry(registry, executor)
+                        ProviderToolRuntime.from_registry_with_proposals(
+                            registry,
+                            executor,
+                            proposal_tool_names=frozenset({CompleteStudyTaskTool.name}),
+                        )
                         if registry.tools
                         else None
                     )
@@ -359,6 +376,7 @@ class AgentRuntimeManager:
                     provider=provider,
                     executor=executor if tool_runtime is None else None,
                     tool_runtime=tool_runtime,
+                    level2_proposer=self._level2_approvals if tool_runtime else None,
                 )
                 async with self._lock:
                     if self._active_run_id == run_id:

@@ -56,12 +56,78 @@ describe("AgentActivityPanel", () => {
     expect(screen.getByRole("heading", { name: label })).toBeInTheDocument();
   });
 
-  it("renders waiting approval as read-only without an approval control", () => {
+  it("explains when waiting approval details must be refreshed", () => {
     renderPanel({ runId: "run-1", state: state({ status: "waiting_approval", durableStatus: "waiting_approval" }), onCancel: vi.fn() });
     expect(screen.getByRole("heading", { name: "Waiting for confirmation" })).toBeInTheDocument();
-    expect(screen.getByText(/Confirmation is read-only here/)).toBeInTheDocument();
+    expect(screen.getByText(/recorded request is unavailable/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /approve|confirm/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+  });
+
+  it("shows only the safe approval summary and gates confirm and reject states", async () => {
+    const user = userEvent.setup();
+    const onConfirmApproval = vi.fn();
+    const onRejectApproval = vi.fn();
+    const waiting = state({
+      status: "waiting_approval",
+      durableStatus: "waiting_approval",
+      pendingApproval: {
+        approvalId: "approval-1",
+        toolName: "complete_study_task",
+        summary: {
+          title: "Complete local task",
+          taskTitle: "Read chapter",
+          courseTitle: "Physics",
+          effect: "Marks the local task complete.",
+        },
+      },
+    });
+    const view = renderPanel({
+      runId: "run-1",
+      state: waiting,
+      onConfirmApproval,
+      onRejectApproval,
+    });
+
+    const approval = screen.getByRole("heading", { name: "Confirm local change" }).closest("section");
+    expect(approval).not.toBeNull();
+    expect(within(approval as HTMLElement).getByText("Complete local task")).toBeInTheDocument();
+    expect(within(approval as HTMLElement).getByText("Read chapter")).toBeInTheDocument();
+    expect(within(approval as HTMLElement).getByText("Physics")).toBeInTheDocument();
+    expect(within(approval as HTMLElement).getByText("Marks the local task complete.")).toBeInTheDocument();
+    expect(approval).not.toHaveTextContent("task-1");
+    expect(approval).not.toHaveTextContent("expectedRevision");
+
+    await user.click(within(approval as HTMLElement).getByRole("button", { name: "Confirm" }));
+    await user.click(within(approval as HTMLElement).getByRole("button", { name: "Reject" }));
+    expect(onConfirmApproval).toHaveBeenCalledWith("approval-1");
+    expect(onRejectApproval).toHaveBeenCalledWith("approval-1");
+
+    view.rerender(
+      <AgentActivityPanel
+        runId="run-1"
+        state={waiting}
+        approvalAction={{ pending: { approvalId: "approval-1", action: "confirm" }, error: null }}
+        onConfirmApproval={onConfirmApproval}
+        onRejectApproval={onRejectApproval}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Confirming…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Confirming…" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+
+    view.rerender(
+      <AgentActivityPanel
+        runId="run-1"
+        state={waiting}
+        viewState="offline"
+        onConfirmApproval={onConfirmApproval}
+        onRejectApproval={onRejectApproval}
+      />,
+    );
+    expect(screen.getByText(/No task completion has been confirmed/)).toHaveAttribute("role", "alert");
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
   });
 
   it("preserves partial content and explains reconnecting and truncation", () => {
