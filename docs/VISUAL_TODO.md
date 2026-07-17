@@ -89,6 +89,13 @@ authorized reference capture, visual-diff artifact or parity measurement. The
 Home / Agent tool trace, loading/error/permission states and HyperKnow visual
 comparison therefore remain Missing.
 
+2026-07-17 course-knowledge tool note: the Agent can now perform bounded,
+course-scoped lexical retrieval as a third Level 1 tool, with private source
+feedback and backend E2E evidence. This batch adds no rendered citation state,
+source preview, authorized reference capture or visual-diff artifact. The Home /
+Agent retrieval trace, source interaction states and HyperKnow comparison remain
+Missing; no visual parity claim is made.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

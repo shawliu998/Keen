@@ -23,6 +23,7 @@ from app.agent.tools import (
     ListDueReviewsTool,
     ListStudyFeedArguments,
     ListStudyFeedTool,
+    SearchCourseKnowledgeTool,
     register_initial_product_tools,
     register_readonly_product_tools,
 )
@@ -70,15 +71,21 @@ class _LongDescriptionReadTool(_UndescribedReadTool):
     description = "x" * (MAX_TOOL_DESCRIPTION_CHARS + 1)
 
 
-def test_readonly_registration_registers_exactly_the_two_read_tools() -> None:
+def test_readonly_registration_registers_exactly_the_scoped_read_tools() -> None:
     registry = _readonly_registry()
 
-    assert list(registry) == ["list_study_feed", "list_due_reviews"]
+    assert list(registry) == [
+        "list_study_feed",
+        "list_due_reviews",
+        "search_course_knowledge",
+    ]
     feed = registry.get("list_study_feed")
     reviews = registry.get("list_due_reviews")
+    knowledge = registry.get("search_course_knowledge")
     assert isinstance(feed, ListStudyFeedTool)
     assert isinstance(reviews, ListDueReviewsTool)
-    for tool in (feed, reviews):
+    assert isinstance(knowledge, SearchCourseKnowledgeTool)
+    for tool in (feed, reviews, knowledge):
         assert tool.permission_level is PermissionLevel.AUTOMATIC
         assert tool.effect is ToolEffect.READ
 
@@ -95,6 +102,7 @@ def test_initial_registration_reuses_readonly_registration() -> None:
     assert list(registry) == [
         "list_study_feed",
         "list_due_reviews",
+        "search_course_knowledge",
         "complete_study_task",
         "export_study_data",
     ]
@@ -117,10 +125,17 @@ def test_read_tool_descriptions_are_fixed_and_hide_trusted_scope() -> None:
         ListDueReviewsTool(
             _unusable_connection_factory, course_id="course-physics", due_at=later
         ),
+        SearchCourseKnowledgeTool(
+            _unusable_connection_factory, course_id="course-calculus"
+        ),
+        SearchCourseKnowledgeTool(
+            _unusable_connection_factory, course_id="course-physics"
+        ),
     ]
 
     assert tools[0].description == tools[1].description
     assert tools[2].description == tools[3].description
+    assert tools[4].description == tools[5].description
     for tool in tools:
         description = tool.description
         assert 0 < len(description) <= MAX_TOOL_DESCRIPTION_CHARS
@@ -145,6 +160,7 @@ def test_policy_catalog_names_match_registry_names_in_order() -> None:
     assert [spec.name for spec in policy.catalog] == [
         "list_study_feed",
         "list_due_reviews",
+        "search_course_knowledge",
     ]
 
 
@@ -173,21 +189,34 @@ def test_policy_derivation_is_deterministic_and_follows_registry_order() -> None
     assert reversed_policy != first
 
 
-def test_catalog_schemas_expose_only_the_bounded_limit_argument() -> None:
+def test_catalog_schemas_expose_only_bounded_non_scope_arguments() -> None:
     policy = ProviderToolPolicy.from_readonly_registry(_readonly_registry())
 
     for spec in policy.catalog:
         assert spec.parameters["type"] == "object"
         assert spec.parameters["additionalProperties"] is False
         properties = spec.parameters["properties"]
-        assert set(properties) == {"limit"}
-        limit = properties["limit"]
-        assert limit["type"] == "integer"
-        assert limit["default"] == 20
-        assert limit["minimum"] == 1
-        assert limit["maximum"] == 50
+        if spec.name == "search_course_knowledge":
+            assert set(properties) == {"query", "limit"}
+            assert properties["query"]["type"] == "string"
+            assert properties["query"]["minLength"] == 1
+            assert properties["query"]["maxLength"] == 512
+            assert properties["limit"] == {
+                "default": 3,
+                "maximum": 5,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer",
+            }
+        else:
+            assert set(properties) == {"limit"}
+            limit = properties["limit"]
+            assert limit["type"] == "integer"
+            assert limit["default"] == 20
+            assert limit["minimum"] == 1
+            assert limit["maximum"] == 50
         serialized = json.dumps(spec.parameters)
-        for forged in ("course_id", "as_of", "due_at"):
+        for forged in ("course_id", "as_of", "due_at", "file_path", "raw_sql"):
             assert forged not in serialized
 
 
@@ -197,7 +226,7 @@ def test_allowed_tool_names_is_derived_and_cannot_drift() -> None:
     assert isinstance(policy.allowed_tool_names, frozenset)
     assert policy.allowed_tool_names == frozenset(spec.name for spec in policy.catalog)
     assert policy.allowed_tool_names == frozenset(
-        {"list_study_feed", "list_due_reviews"}
+        {"list_study_feed", "list_due_reviews", "search_course_knowledge"}
     )
 
     with pytest.raises(TypeError, match="must be derived"):
