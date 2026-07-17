@@ -114,8 +114,13 @@ def test_course_create_scans_legacy_titles_without_rewriting_duplicate_legacy_ro
         )
         connection.commit()
 
-    assert database.migrate() == [21]
+    assert database.migrate() == [21, 22]
     with database.connection() as connection:
+        study_session_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(study_sessions)")
+        }
+        assert "originating_task_id" in study_session_columns
         legacy = connection.execute(
             "SELECT id, normalized_title FROM courses ORDER BY id"
         ).fetchall()
