@@ -411,6 +411,9 @@ class AutonomousStudyTaskResponse(ApiModel):
     estimated_minutes: int = Field(ge=1, le=1_440)
     status: Literal["upcoming", "overdue", "completed"]
     source_type: str = Field(min_length=1, max_length=100)
+    # Legacy/manual tasks may not have recommendation provenance. Keep an
+    # empty stored identifier representable rather than changing read behavior.
+    source_id: str | None = Field(default=None, max_length=128)
 
 
 class AutonomousStudySessionUnitResponse(ApiModel):

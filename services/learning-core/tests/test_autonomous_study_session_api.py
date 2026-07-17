@@ -8,6 +8,7 @@ import sqlite3
 from threading import Barrier, Lock
 
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 import pytest
 
 from app.repositories.study_repository import StudyRepository
@@ -23,6 +24,7 @@ from app.services.study_session_read import (
     StudySessionReadService,
 )
 from app.routers.autonomous_study_sessions import _read_response
+from app.schemas import AutonomousStudyTaskResponse
 
 from conftest import TOKEN
 
@@ -153,6 +155,27 @@ def _read_session(client: TestClient, session_id: str, *, course_id: str = COURS
     )
 
 
+def test_autonomous_study_task_response_bounds_source_id_without_rejecting_empty_legacy_value() -> None:
+    task = {
+        "id": "task-source-id-contract",
+        "course_id": COURSE_ID,
+        "concept_id": None,
+        "title": "Legacy task",
+        "reason": "Read a historical task without changing it.",
+        "estimated_minutes": 20,
+        "status": "upcoming",
+        "source_type": "manual",
+    }
+
+    assert AutonomousStudyTaskResponse.model_validate(
+        {**task, "source_id": ""}
+    ).source_id == ""
+    with pytest.raises(ValidationError):
+        AutonomousStudyTaskResponse.model_validate(
+            {**task, "source_id": "x" * 129}
+        )
+
+
 def test_start_api_creates_source_grounded_session_and_replays(
     client: TestClient,
 ) -> None:
@@ -174,6 +197,7 @@ def test_start_api_creates_source_grounded_session_and_replays(
         "estimated_minutes": 20,
         "status": "upcoming",
         "source_type": "weak_concept",
+        "source_id": CONCEPT_ID,
     }
     assert body["session"]["status"] == "goal_confirmation"
     assert body["session"]["originating_task_id"] == "task-api-create"
@@ -206,6 +230,36 @@ def test_start_api_creates_source_grounded_session_and_replays(
     assert restored_body["recovery_action"] is None
     assert "private-path-must-not-leak" not in restored.text
     assert "goal_scope" not in restored.text
+
+
+def test_start_api_resumes_named_source_session_and_exposes_source_id(
+    client: TestClient,
+) -> None:
+    _course_and_concept(client)
+    with client.app.state.database.connection() as connection:
+        session = StudyRepository(connection).create_session(
+            session_id="source-session-api",
+            course_id=COURSE_ID,
+            title="Existing source-grounded work",
+            mode="study",
+            goal="Continue the existing work.",
+            estimated_minutes=20,
+            created_at=NOW,
+        )
+    _task(
+        client,
+        task_id="task-api-resume-source",
+        source_type="study_session",
+        source_id=session["id"],
+    )
+
+    response = _start(client, "task-api-resume-source")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "resumed"
+    assert body["task"]["source_type"] == "study_session"
+    assert body["task"]["source_id"] == body["session"]["id"]
 
 
 def test_read_session_returns_typed_plan_unavailable_without_fabricating_work(
@@ -560,20 +614,28 @@ def test_start_api_returns_truthful_blocked_outcomes_without_cross_course_leakag
         )
 
     samples = {
-        "missing-task": "task_not_found",
-        "task-api-completed": "task_not_actionable",
-        "task-api-manual": "task_not_autonomous",
-        "task-api-no-concept": "task_missing_concept",
-        "task-api-no-source": "no_indexed_source",
-        "task-api-missing-source-session": "source_session_unavailable",
-        "task-api-terminal": "originating_session_terminal",
+        "missing-task": ("task_not_found", None),
+        "task-api-completed": ("task_not_actionable", CONCEPT_ID),
+        "task-api-manual": ("task_not_autonomous", CONCEPT_ID),
+        "task-api-no-concept": ("task_missing_concept", None),
+        "task-api-no-source": ("no_indexed_source", CONCEPT_ID),
+        "task-api-missing-source-session": (
+            "source_session_unavailable",
+            "unavailable-source-session",
+        ),
+        "task-api-terminal": ("originating_session_terminal", CONCEPT_ID),
     }
-    for task_id, reason in samples.items():
+    for task_id, (reason, source_id) in samples.items():
         response = _start(client, task_id)
         assert response.status_code == 200
         body = response.json()
         assert body["outcome"] == "blocked"
         assert body["blocked_reason"] == reason
+        if task_id == "missing-task":
+            assert body["task"] is None
+        else:
+            assert body["task"] is not None
+            assert body["task"]["source_id"] == source_id
         assert body["session"] is None
         assert body["plan"] is None
         assert body["recovery_action"]
@@ -584,6 +646,7 @@ def test_start_api_returns_truthful_blocked_outcomes_without_cross_course_leakag
     assert outside.json()["blocked_reason"] == "task_outside_course"
     assert outside.json()["task"] is None
     assert COURSE_ID not in outside.text
+    assert CONCEPT_ID not in outside.text
     assert "task-api-no-source" not in outside.text
 
 

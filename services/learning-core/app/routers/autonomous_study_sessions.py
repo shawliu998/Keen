@@ -104,6 +104,7 @@ def _task(task: dict[str, Any] | None) -> AutonomousStudyTaskResponse | None:
             "estimated_minutes": task["estimated_minutes"],
             "status": task["status"],
             "source_type": task["source_type"],
+            "source_id": task["source_id"],
         }
     )
 
