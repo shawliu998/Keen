@@ -198,7 +198,7 @@ The 2026-07-17 Level 2 slice adds a Home Agent confirmation card with a safe tas
 
 The 2026-07-17 diagnostic-progression backend slice initially added no rendered UI. The subsequent live Deep Learn client now renders the opening reflection, three self-assessment controls, pending/error/unknown/cancelled recovery, paused read-only state and first-active-unit handoff. Component and contract tests cover behavior, but no screenshot, accessibility audit or authorized visual diff was produced. Spacing, responsive treatment and parity therefore remain `implemented / unverified` visual work.
 
-The 2026-07-18 active-recall slice is backend-only. It adds persisted pending, answered and cancelled domain states plus learner-safe projections, but no HTTP/client/Desktop rendering, screenshot, accessibility audit or visual diff. The active-recall row therefore remains `Missing`; no HyperKnow-parity claim is made.
+The 2026-07-18 active-recall slices remain non-visual. They add persisted pending, answered and cancelled domain states, authenticated HTTP resources and learner-safe projections, but no TypeScript client/Desktop rendering, screenshot, accessibility audit or visual diff. The active-recall row therefore remains `Missing`; no HyperKnow-parity claim is made.
 
 | Date | Reference ID | Route/state | Viewport | Seed | Mismatch | Artifact paths | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -63,6 +63,27 @@ def _is_study_diagnostic_action(path: object) -> bool:
     return begin or answer
 
 
+def _is_study_active_recall_action(path: object) -> bool:
+    if not isinstance(path, str):
+        return False
+    segments = path.split("/")
+    begin = (
+        len(segments) == 5
+        and segments[1:3] == ["v1", "study-sessions"]
+        and bool(segments[3])
+        and segments[4] == "active-recall"
+    )
+    answer = (
+        len(segments) == 7
+        and segments[1:3] == ["v1", "study-sessions"]
+        and bool(segments[3])
+        and segments[4] == "active-recall"
+        and bool(segments[5])
+        and segments[6] == "answer"
+    )
+    return begin or answer
+
+
 class _RequestBodyTooLarge(Exception):
     """Internal control flow used to stop downstream parsing immediately."""
 
@@ -127,6 +148,7 @@ class RequestGuardMiddleware:
             path in BOUNDED_JSON_PATHS
             or _is_agent_mutation_action(path)
             or _is_study_diagnostic_action(path)
+            or _is_study_active_recall_action(path)
         )
         if not is_document_import and not is_bounded_json:
             await self.app(scope, receive, send)

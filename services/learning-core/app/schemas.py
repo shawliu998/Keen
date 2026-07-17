@@ -558,3 +558,124 @@ class DiagnosticReadResponse(ApiModel):
     checkpoint: DiagnosticCheckpointResponse | None = None
     current_unit: AutonomousStudySessionUnitResponse | None = None
     current_unit_id: str | None = Field(default=None, max_length=128)
+
+
+class ActiveRecallProgressionRequest(ApiModel):
+    course_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_LEARNING_IDENTIFIER_PATTERN,
+        strict=True,
+    )
+    expected_revision: int = Field(ge=0, strict=True)
+    idempotency_key: str = Field(
+        min_length=16,
+        max_length=128,
+        pattern=_LEARNING_IDENTIFIER_PATTERN,
+        strict=True,
+    )
+
+
+class ActiveRecallAnswerRequest(ActiveRecallProgressionRequest):
+    response: str = Field(min_length=1, max_length=8_000, strict=True)
+
+    @field_validator("response")
+    @classmethod
+    def response_has_visible_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("response must contain non-whitespace characters")
+        return value
+
+
+class ActiveRecallSessionResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    course_id: str = Field(min_length=1, max_length=128)
+    status: Literal[
+        "draft",
+        "goal_confirmation",
+        "diagnosing",
+        "planning",
+        "studying",
+        "checkpoint",
+        "active_recall",
+        "practicing",
+        "summarizing",
+        "review_scheduling",
+        "paused",
+        "completed",
+        "cancelled",
+        "failed",
+    ]
+    revision: int = Field(ge=0)
+    progress: float = Field(ge=0, le=1, allow_inf_nan=False)
+    estimated_minutes: int = Field(ge=1, le=1_440)
+    current_unit_id: str | None = Field(default=None, max_length=128)
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ActiveRecallPlanUnitResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=256)
+    ordinal: int = Field(ge=0, le=7)
+    estimated_minutes: int = Field(ge=1, le=1_440)
+    status: Literal["locked", "ready", "active", "completed", "skipped"]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ActiveRecallPlanResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    version: int = Field(ge=1)
+    units: list[ActiveRecallPlanUnitResponse] = Field(min_length=2, max_length=8)
+
+
+class ActiveRecallCheckpointResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    kind: Literal["active_recall"]
+    prompt: str = Field(min_length=1, max_length=1_400)
+    status: Literal["pending", "answered", "skipped"]
+    created_at: datetime
+    answered_at: datetime | None = None
+
+
+class ActiveRecallRunResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    status: Literal["pending", "answered", "cancelled"]
+    checkpoint_id: str = Field(min_length=1, max_length=128)
+    generator_version: str = Field(min_length=1, max_length=128)
+    created_at: datetime
+    answered_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancellation_reason: Literal["session_cancelled", "session_failed"] | None = None
+
+
+class ActiveRecallGradeResponse(ApiModel):
+    correct: bool
+    score: float = Field(ge=0, le=1, allow_inf_nan=False)
+    max_score: float = Field(gt=0, le=1, allow_inf_nan=False)
+    grader_version: str = Field(min_length=1, max_length=128)
+
+
+class ActiveRecallProgressionResponse(ApiModel):
+    outcome: Literal["applied", "replayed"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: ActiveRecallSessionResponse
+    plan: ActiveRecallPlanResponse
+    checkpoint: ActiveRecallCheckpointResponse
+    current_unit: ActiveRecallPlanUnitResponse | None = None
+    run: ActiveRecallRunResponse
+    grade: ActiveRecallGradeResponse | None = None
+
+
+class ActiveRecallReadResponse(ApiModel):
+    outcome: Literal["not_started", "pending", "answered", "cancelled"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: ActiveRecallSessionResponse
+    plan: ActiveRecallPlanResponse
+    checkpoint: ActiveRecallCheckpointResponse | None = None
+    current_unit: ActiveRecallPlanUnitResponse | None = None
+    run: ActiveRecallRunResponse | None = None
+    grade: ActiveRecallGradeResponse | None = None
