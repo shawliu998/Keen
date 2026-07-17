@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle, CalendarClock, Check, ChevronRight, Clock3, Filter,
   Lightbulb, LoaderCircle, RotateCcw, ServerOff, Square, Sparkles,
@@ -104,10 +105,13 @@ function TaskCard({ task, isDemo, onUpdate, onInspect }: {
   );
 }
 
-function LiveTaskCard({ task, candidate, onInspect }: {
+function LiveTaskCard({ task, candidate, onInspect, onStart, pending, unavailable }: {
   task: LearningFeedTask;
   candidate: LearningActionCandidate | null;
   onInspect: () => void;
+  onStart: () => void;
+  pending: boolean;
+  unavailable: boolean;
 }) {
   const overdue = task.status === "overdue";
   return <Card className="task-card">
@@ -118,7 +122,7 @@ function LiveTaskCard({ task, candidate, onInspect }: {
       <div className="task-title-row"><div><Badge tone={overdue ? "danger" : "accent"}>{overdue ? "Overdue" : "Upcoming"}</Badge><h3>{task.title}</h3></div><span>{new Date(task.due_at).toLocaleString()}</span></div>
       <p className="reason"><Lightbulb size={14} />{task.reason}</p>
       <div className="task-meta"><span>{task.estimated_minutes} min</span><Badge>Priority {task.priority_score.toFixed(2)}</Badge></div>
-      <div className="task-bottom"><div className="task-actions"><button onClick={onInspect}>Why this?<ChevronRight size={13} /></button><Badge>Persisted local task</Badge></div></div>
+      <div className="task-bottom"><div className="task-actions"><button onClick={onInspect}>Why this?<ChevronRight size={13} /></button><Badge>Persisted local task</Badge><Button className="primary" disabled={pending || unavailable} onClick={onStart}>{pending ? <LoaderCircle className="spin" size={14} /> : null}{pending ? "Starting…" : "Start / resume"}</Button></div></div>
       {candidate ? <p className="feed-candidate-note">Current action: {candidate.action.replaceAll("_", " ")}.</p> : null}
     </div>
   </Card>;
@@ -140,6 +144,14 @@ export function LearningFeedPage() {
   const [status, setStatus] = useState<TaskStatus>("today");
   const [course, setCourse] = useState("All courses");
   const [requestedLiveCourseId, setRequestedLiveCourseId] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const startControllerRef = useRef<AbortController | null>(null);
+  const activeStartTaskRef = useRef<LearningFeedTask | null>(null);
+  const startRequestRef = useRef(0);
+  const [startingTaskId, setStartingTaskId] = useState<string | null>(null);
+  const [startNotice, setStartNotice] = useState<{ tone: "blocked" | "unknown" | "cancelled" | "unavailable"; message: string } | null>(null);
+  const [recoverableStartTask, setRecoverableStartTask] = useState<LearningFeedTask | null>(null);
+  const [startScope, setStartScope] = useState<string | null>(null);
   const isDemo = core.status === "demo";
   const liveCourses = useMemo(() => core.demoState?.courses ?? [], [core.demoState?.courses]);
   const liveCourseId = liveCourses.some((item) => item.id === requestedLiveCourseId)
@@ -151,6 +163,22 @@ export function LearningFeedPage() {
     enabled: !isDemo && core.status === "healthy" && !core.demoStateError && core.demoState !== undefined,
     connectionGeneration: core.connectionGeneration,
   });
+  const startScopeKey = `${core.connectionGeneration}:${liveCourseId ?? ""}`;
+  const currentStartScopeRef = useRef(startScopeKey);
+  useLayoutEffect(() => {
+    currentStartScopeRef.current = startScopeKey;
+  }, [startScopeKey]);
+  const visibleStartingTaskId = startScope === startScopeKey ? startingTaskId : null;
+  const visibleStartNotice = startScope === startScopeKey ? startNotice : null;
+  const visibleRecoverableStartTask = startScope === startScopeKey ? recoverableStartTask : null;
+  useEffect(() => {
+    return () => {
+      startRequestRef.current += 1;
+      startControllerRef.current?.abort();
+      startControllerRef.current = null;
+      activeStartTaskRef.current = null;
+    };
+  }, [core.client, core.connectionGeneration, liveCourseId]);
   const tasks = useMemo(() => isDemo ? demoTasks : core.demoState ? mapDemoStateTasks(core.demoState) : [], [core.demoState, demoTasks, isDemo]);
   const filtered = useMemo(() => tasks.filter((task) => task.status === status && (course === "All courses" || task.course === course)), [course, status, tasks]);
   const courses = ["All courses", ...Array.from(new Set(tasks.map((task) => task.course)))];
@@ -166,6 +194,70 @@ export function LearningFeedPage() {
     eyebrow: "Persisted learning rationale", title: task.title, body: task.reason,
     meta: [`Due ${new Date(task.due_at).toLocaleString()}`, `${task.estimated_minutes} minute estimate`, `Priority ${task.priority_score.toFixed(2)}`],
   });
+  const cancelStart = () => {
+    if (!startControllerRef.current) return;
+    startControllerRef.current.abort();
+    startControllerRef.current = null;
+    startRequestRef.current += 1;
+    setRecoverableStartTask(activeStartTaskRef.current);
+    activeStartTaskRef.current = null;
+    setStartingTaskId(null);
+    setStartScope(startScopeKey);
+    setStartNotice({ tone: "cancelled", message: "Start request cancelled, but the session may already be saved. Recover this same task before starting another one." });
+  };
+  const startTask = async (task: LearningFeedTask, recovery = false) => {
+    if (!core.client || !liveCourseId || startControllerRef.current || (!recovery && visibleRecoverableStartTask !== null)) return;
+    const controller = new AbortController();
+    const request = startRequestRef.current + 1;
+    startRequestRef.current = request;
+    startControllerRef.current = controller;
+    activeStartTaskRef.current = task;
+    setStartingTaskId(task.id);
+    setStartScope(startScopeKey);
+    setStartNotice(null);
+    setRecoverableStartTask(null);
+    try {
+      const result = await core.client.startAutonomousStudySession({ course_id: liveCourseId, task_id: task.id }, { signal: controller.signal });
+      if (controller.signal.aborted || startRequestRef.current !== request) return;
+      if (result.outcome === "blocked") {
+        setRecoverableStartTask(null);
+        setStartNotice({ tone: "blocked", message: result.recovery_action ?? "This local task cannot be started. Refresh the learning feed for a recovery action." });
+        return;
+      }
+      if (!result.session) {
+        setRecoverableStartTask(task);
+        setStartNotice({ tone: "unknown", message: "Keen could not confirm the local study session. Recover this same task before starting another one." });
+        return;
+      }
+      setRecoverableStartTask(null);
+      navigate(`/deep-learn/${encodeURIComponent(result.session.id)}?course_id=${encodeURIComponent(liveCourseId)}`);
+    } catch (error) {
+      if (startRequestRef.current !== request || currentStartScopeRef.current !== startScopeKey) return;
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+        setRecoverableStartTask(task);
+        setStartNotice({ tone: "cancelled", message: "Start request cancelled, but the session may already be saved. Recover this same task before starting another one." });
+      } else if (error instanceof Error && "status" in error && error.status === 503) {
+        setRecoverableStartTask(task);
+        setStartNotice({ tone: "unavailable", message: "The local study service is unavailable and the session may already be saved. Restore it, then recover this same task." });
+      } else {
+        setRecoverableStartTask(task);
+        setStartNotice({ tone: "unknown", message: "Keen could not confirm whether a local study session was saved. Recover this same task before starting another one." });
+      }
+    } finally {
+      if (startControllerRef.current === controller) startControllerRef.current = null;
+      if (activeStartTaskRef.current === task) activeStartTaskRef.current = null;
+      if (startRequestRef.current === request) setStartingTaskId(null);
+    }
+  };
+  const reconcileStart = async () => {
+    const scope = startScopeKey;
+    const request = startRequestRef.current;
+    const refreshed = await liveFeed.refetchSnapshot();
+    if (refreshed.isSuccess && currentStartScopeRef.current === scope && startRequestRef.current === request) {
+      setStartScope(startScopeKey);
+      setStartNotice(null);
+    }
+  };
 
   return (
     <Page title="Learning Feed" description="Local tasks and deterministic next actions, based only on stored learning evidence." actions={isDemo ? <Button disabled><CalendarClock size={15} />Planning unavailable</Button> : liveFeed.recommendation.pending ? <Button onClick={liveFeed.cancelRecommendation}><Square size={15} />Cancel recommendation</Button> : <Button className="primary" disabled={liveCourseId === null || core.status !== "healthy" || liveFeed.recommendation.error !== null || liveFeed.recommendation.cancelled} onClick={() => { void liveFeed.createRecommendation(); }}><Sparkles size={15} />Plan next local action</Button>}>
@@ -178,11 +270,13 @@ export function LearningFeedPage() {
         <div className="filter-bar"><label className="select-control"><Filter size={14} /><select aria-label="Select course for local learning feed" value={liveCourseId ?? ""} onChange={(event) => setRequestedLiveCourseId(event.target.value)}>{liveCourses.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div>
         {liveFeed.snapshotPending && <Card className="service-state" role="status"><LoaderCircle className="spin" size={23} /><div><strong>Loading local learning evidence</strong><p>Keen is reading persisted tasks, reviews, sessions, and mastery state. No recommendation is being created.</p></div></Card>}
         {liveFeed.snapshotError && <Card className="service-state" role="alert"><AlertCircle size={23} /><div><strong>Learning feed could not be validated</strong><p>The local service did not return a valid learning snapshot. No recommendation or task was created. Retry the feed after the service recovers.</p></div><Button onClick={() => { void liveFeed.refetchSnapshot(); }}>Retry feed</Button></Card>}
+        {visibleStartingTaskId && <Card className="service-state" role="status"><LoaderCircle className="spin" size={23} /><div><strong>Preparing a local study session</strong><p>Keen is creating or resuming the source-grounded session. Cancel if you do not want to wait.</p></div><Button onClick={cancelStart}><Square size={14} />Cancel</Button></Card>}
+        {visibleStartNotice && <Card className="service-state" role={visibleStartNotice.tone === "blocked" || visibleStartNotice.tone === "cancelled" ? "status" : "alert"}><AlertCircle size={23} /><div><strong>{visibleStartNotice.tone === "blocked" ? "Task cannot start yet" : visibleStartNotice.tone === "unavailable" ? "Local study service is unavailable" : visibleStartNotice.tone === "cancelled" ? "Start request cancelled" : "Study session could not be confirmed"}</strong><p>{visibleStartNotice.message}</p></div>{visibleRecoverableStartTask ? <Button disabled={core.status !== "healthy"} onClick={() => { void startTask(visibleRecoverableStartTask, true); }}>Recover start</Button> : <Button onClick={() => { void reconcileStart(); }}>Refresh feed</Button>}</Card>}
         {liveFeed.recommendation.cancelled && <Card className="service-state" role="status"><Square size={23} /><div><strong>Recommendation request cancelled</strong><p>Keen ignored the unfinished response. Refresh the feed before retrying if you need to confirm local tasks.</p></div><Button onClick={() => { void liveFeed.reconcileRecommendation(); }}>Refresh feed</Button></Card>}
         {liveFeed.recommendation.error && <Card className="service-state" role="alert"><AlertCircle size={23} /><div><strong>{liveFeed.recommendation.error === "service_unavailable" ? "Local recommendation service is unavailable" : "Recommendation could not be confirmed"}</strong><p>{liveFeed.recommendation.error === "service_unavailable" ? "Keen could not confirm whether a task was saved. Restore the local service and refresh the feed before retrying." : "Keen could not confirm whether a task was saved. Refresh the feed before retrying to avoid duplicates."}</p></div><Button onClick={() => { void liveFeed.reconcileRecommendation(); }}>Refresh feed</Button></Card>}
         {liveFeed.recommendation.result && <RecommendationNotice outcome={liveFeed.recommendation.result.outcome} />}
         {liveFeed.snapshot && <div className="timeline">
-          {liveFeed.snapshot.pending_tasks.map((task) => <LiveTaskCard key={task.id} task={task} candidate={task.id === liveFeed.recommendation.result?.task?.id ? liveFeed.recommendation.result.candidate : null} onInspect={() => inspectLive(task)} />)}
+          {liveFeed.snapshot.pending_tasks.map((task) => <LiveTaskCard key={task.id} task={task} candidate={task.id === liveFeed.recommendation.result?.task?.id ? liveFeed.recommendation.result.candidate : null} onInspect={() => inspectLive(task)} onStart={() => { void startTask(task); }} pending={visibleStartingTaskId === task.id} unavailable={visibleRecoverableStartTask !== null || visibleStartingTaskId !== null || core.status !== "healthy"} />)}
           {liveFeed.snapshot.pending_tasks.length === 0 && <Card><EmptyState icon={<Check size={28} />} title="No active local tasks" description={liveFeed.snapshot.candidates.length > 0 ? "Keen found an eligible next action, but no task has been created. Use “Plan next local action” to create one local task." : "Keen found no eligible action in the persisted learning evidence."} /></Card>}
         </div>}
       </>}

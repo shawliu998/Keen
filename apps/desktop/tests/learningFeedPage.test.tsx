@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createLearningCoreClient, LearningCoreResponseError, type LearningCoreClient, type LearningSnapshot } from "@keen/api-client";
+import { MemoryRouter, useLocation } from "react-router-dom";
+import { createLearningCoreClient, LearningCoreResponseError, type AutonomousStudySessionStartResponse, type LearningCoreClient, type LearningSnapshot } from "@keen/api-client";
 import { LearningFeedPage } from "../src/features/feed/LearningFeedPage";
 import { useAutonomousLearningFeed } from "../src/features/feed/useAutonomousLearningFeed";
 
@@ -30,7 +31,12 @@ const snapshot: LearningSnapshot = {
   pending_tasks: [task], candidates: [candidate],
 };
 
-function renderFeed(client: Pick<LearningCoreClient, "learningSnapshot" | "createAutonomousRecommendation"> | null, demo = false) {
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="Current test route">{location.pathname}{location.search}</output>;
+}
+
+function renderFeed(client: (Pick<LearningCoreClient, "learningSnapshot" | "createAutonomousRecommendation"> & Partial<Pick<LearningCoreClient, "startAutonomousStudySession">>) | null, demo = false) {
   coreState.current = {
     status: demo ? "demo" : "healthy", client, connectionGeneration: 1,
     demoState: demo ? undefined : { courses: [{ id: "course-1", title: "Calculus", description: "", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null }, { id: "course-2", title: "Physics", description: "", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null }], tasks: [], mastery: [] },
@@ -38,7 +44,7 @@ function renderFeed(client: Pick<LearningCoreClient, "learningSnapshot" | "creat
   } as never;
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return Object.assign(
-    render(<QueryClientProvider client={queryClient}><LearningFeedPage /></QueryClientProvider>),
+    render(<MemoryRouter initialEntries={["/feed"]}><QueryClientProvider client={queryClient}><LearningFeedPage /><LocationProbe /></QueryClientProvider></MemoryRouter>),
     { queryClient },
   );
 }
@@ -211,6 +217,61 @@ describe("LearningFeedPage autonomous learning", () => {
     expect(screen.queryByText("Completed limits task")).not.toBeInTheDocument();
   });
 
+  it("starts a persisted task once and navigates only after a confirmed created session", async () => {
+    const session = { id: "session-1", course_id: "course-1", originating_task_id: "task-1", title: "Limits study", mode: "study" as const, goal: "Study limits.", estimated_minutes: 20, status: "goal_confirmation" as const, progress: 0, revision: 0, created_at: "2026-07-17T10:00:00+00:00", updated_at: "2026-07-17T10:00:00+00:00", started_at: null };
+    const startTask = { id: "task-1", course_id: "course-1", concept_id: "concept-1", title: "Persisted limits task", reason: "Mastery is weak.", estimated_minutes: 15, status: "upcoming" as const, source_type: "weak_concept", source_id: "concept-1" };
+    const plan = { id: "plan-1", session_id: "session-1", version: 1, rationale: "Use indexed evidence.", units: [
+      { id: "unit-1", ordinal: 0, concept_id: "concept-1", concept_ids: ["concept-1"], source_chunk_ids: ["chunk-1"], title: "Part one", objective: "Read.", content: "Source one.", estimated_minutes: 10, status: "ready" as const },
+      { id: "unit-2", ordinal: 1, concept_id: "concept-1", concept_ids: ["concept-1"], source_chunk_ids: ["chunk-2"], title: "Part two", objective: "Connect.", content: "Source two.", estimated_minutes: 10, status: "locked" as const },
+    ] };
+    let resolve!: (value: AutonomousStudySessionStartResponse) => void;
+    const startAutonomousStudySession = vi.fn(() => new Promise<AutonomousStudySessionStartResponse>((done) => { resolve = done; }));
+    renderFeed({ learningSnapshot: vi.fn(async () => snapshot), createAutonomousRecommendation: vi.fn(), startAutonomousStudySession });
+    const start = await screen.findByRole("button", { name: "Start / resume" });
+    act(() => { start.click(); start.click(); });
+    expect(startAutonomousStudySession).toHaveBeenCalledOnce();
+    expect(screen.getByText("/feed")).toBeInTheDocument();
+    resolve({ outcome: "session_created", course_id: "course-1", task: startTask, session, plan, blocked_reason: null, recovery_action: null });
+    await waitFor(() => expect(screen.getByText("/deep-learn/session-1?course_id=course-1")).toBeInTheDocument());
+  });
+
+  it("keeps cancelled and 503 starts locked to an idempotent same-task recovery", async () => {
+    const user = userEvent.setup();
+    const session = { id: "session-1", course_id: "course-1", originating_task_id: "task-1", title: "Limits study", mode: "study" as const, goal: "Study limits.", estimated_minutes: 20, status: "goal_confirmation" as const, progress: 0, revision: 0, created_at: "2026-07-17T10:00:00+00:00", updated_at: "2026-07-17T10:00:00+00:00", started_at: null };
+    const startTask = { id: "task-1", course_id: "course-1", concept_id: "concept-1", title: "Persisted limits task", reason: "Mastery is weak.", estimated_minutes: 15, status: "upcoming" as const, source_type: "weak_concept", source_id: "concept-1" };
+    const unresolved = new Promise(() => undefined);
+    const startAutonomousStudySession = vi.fn()
+      .mockReturnValueOnce(unresolved)
+      .mockRejectedValueOnce(new LearningCoreResponseError(503, null, null))
+      .mockResolvedValueOnce({ outcome: "resumed", course_id: "course-1", task: startTask, session, plan: null, blocked_reason: null, recovery_action: null });
+    renderFeed({ learningSnapshot: vi.fn(async () => snapshot), createAutonomousRecommendation: vi.fn(), startAutonomousStudySession });
+    await user.click(await screen.findByRole("button", { name: "Start / resume" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Start / resume" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Recover start" }));
+    expect(await screen.findByText("Local study service is unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start / resume" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Recover start" }));
+    await waitFor(() => expect(screen.getByText("/deep-learn/session-1?course_id=course-1")).toBeInTheDocument());
+    expect(startAutonomousStudySession).toHaveBeenCalledTimes(3);
+    expect(startAutonomousStudySession.mock.calls.every((call) => call[0].task_id === "task-1")).toBe(true);
+  });
+
+  it("clears the uncertain lock only for a typed blocked recovery", async () => {
+    const user = userEvent.setup();
+    const startTask = { id: "task-1", course_id: "course-1", concept_id: "concept-1", title: "Persisted limits task", reason: "Mastery is weak.", estimated_minutes: 15, status: "upcoming" as const, source_type: "weak_concept", source_id: "concept-1" };
+    const startAutonomousStudySession = vi.fn()
+      .mockRejectedValueOnce(new Error("connection ended"))
+      .mockResolvedValueOnce({ outcome: "blocked", course_id: "course-1", task: startTask, session: null, plan: null, blocked_reason: "no_indexed_source", recovery_action: "Wait for indexing." });
+    renderFeed({ learningSnapshot: vi.fn(async () => snapshot), createAutonomousRecommendation: vi.fn(), startAutonomousStudySession });
+    await user.click(await screen.findByRole("button", { name: "Start / resume" }));
+    expect(await screen.findByText("Study session could not be confirmed")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Recover start" }));
+    expect(await screen.findByText("Wait for indexing.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Recover start" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start / resume" })).toBeEnabled();
+  });
+
   it("ignores a late recommendation result after the course changes", async () => {
     const user = userEvent.setup();
     type CreatedResult = { outcome: "task_created"; course_id: string; snapshot: LearningSnapshot; task: typeof task; candidate: typeof candidate; bootstrap: null };
@@ -252,7 +313,7 @@ describe("LearningFeedPage autonomous learning", () => {
     fireEvent.click(screen.getByRole("button", { name: /Plan next local action/i }));
 
     coreState.current = { ...(coreState.current as unknown as Record<string, unknown>), connectionGeneration: 2 } as never;
-    view.rerender(<QueryClientProvider client={view.queryClient}><LearningFeedPage /></QueryClientProvider>);
+    view.rerender(<MemoryRouter><QueryClientProvider client={view.queryClient}><LearningFeedPage /></QueryClientProvider></MemoryRouter>);
     await screen.findByText("Generation two task");
     await waitFor(() => expect(screen.getByRole("button", { name: /Plan next local action/i })).toBeEnabled());
     const lateTask = { ...task, title: "Late task from old generation" };

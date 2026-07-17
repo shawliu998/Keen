@@ -257,6 +257,134 @@ export const autonomousRecommendationResponseSchema = z.object({
   }
 });
 
+const learningIdentifierSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+
+export const autonomousStudySessionRequestSchema = z.object({
+  course_id: learningIdentifierSchema,
+  task_id: learningIdentifierSchema,
+}).strict();
+
+export const autonomousStudyTaskSchema = z.object({
+  id: learningIdentifierSchema,
+  course_id: learningIdentifierSchema,
+  concept_id: learningIdentifierSchema.nullable(),
+  title: z.string().min(1).max(500),
+  reason: z.string().min(1).max(2_000),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  status: z.enum(["upcoming", "overdue", "completed"]),
+  source_type: z.string().min(1).max(100),
+  source_id: learningIdentifierSchema.nullable(),
+}).strict();
+
+export const autonomousStudySessionUnitSchema = z.object({
+  id: z.string().min(1).max(256),
+  ordinal: z.number().int().min(0).max(7),
+  concept_id: learningIdentifierSchema.nullable(),
+  concept_ids: z.array(learningIdentifierSchema).min(1).max(8),
+  source_chunk_ids: z.array(learningIdentifierSchema).min(1).max(8),
+  title: z.string().min(1).max(500),
+  objective: z.string().min(1).max(5_000),
+  // Source text is untrusted display data. It is deliberately data-only in this contract.
+  content: z.string().max(1_200),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  status: z.enum(["locked", "ready", "active", "completed", "skipped"]),
+}).strict();
+
+export const autonomousStudyPlanSchema = z.object({
+  id: learningIdentifierSchema,
+  session_id: learningIdentifierSchema,
+  version: z.number().int().min(1),
+  rationale: z.string().min(1).max(2_000),
+  units: z.array(autonomousStudySessionUnitSchema).min(2).max(8),
+}).strict().superRefine((plan, context) => {
+  const ids = new Set<string>();
+  plan.units.forEach((unit, index) => {
+    if (ids.has(unit.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Study plan unit IDs must be unique.", path: ["units", index, "id"] });
+    ids.add(unit.id);
+    if (unit.ordinal !== index) context.addIssue({ code: z.ZodIssueCode.custom, message: "Study plan unit ordinals must be contiguous.", path: ["units", index, "ordinal"] });
+    if (unit.concept_id !== null && !unit.concept_ids.includes(unit.concept_id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A unit concept_id must occur in concept_ids.", path: ["units", index, "concept_id"] });
+    }
+  });
+});
+
+export const autonomousStudySessionSchema = z.object({
+  id: learningIdentifierSchema,
+  course_id: learningIdentifierSchema,
+  originating_task_id: learningIdentifierSchema.nullable(),
+  title: z.string().min(1).max(500),
+  mode: z.enum(["teach", "study", "review", "plan"]),
+  goal: z.string().min(1).max(5_000),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  status: z.enum(["draft", "goal_confirmation", "diagnosing", "planning", "studying", "checkpoint", "active_recall", "practicing", "summarizing", "review_scheduling", "paused", "completed", "cancelled", "failed"]),
+  progress: finiteNumberSchema.min(0).max(1),
+  revision: z.number().int().nonnegative(),
+  created_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
+  started_at: isoDateTimeSchema.nullable(),
+}).strict();
+
+const blockedStudySessionReasonSchema = z.enum([
+  "task_not_found", "task_outside_course", "task_not_actionable", "task_not_autonomous",
+  "task_missing_concept", "source_session_unavailable", "originating_session_terminal", "no_indexed_source",
+]);
+
+export const autonomousStudySessionStartResponseSchema = z.object({
+  outcome: z.enum(["session_created", "resumed", "blocked"]),
+  course_id: learningIdentifierSchema,
+  task: autonomousStudyTaskSchema.nullable(),
+  session: autonomousStudySessionSchema.nullable(),
+  plan: autonomousStudyPlanSchema.nullable(),
+  blocked_reason: blockedStudySessionReasonSchema.nullable(),
+  recovery_action: z.string().min(1).max(500).nullable(),
+}).strict().superRefine((result, context) => {
+  const blocked = result.outcome === "blocked";
+  if (blocked) {
+    if (result.session !== null || result.plan !== null || result.blocked_reason === null || result.recovery_action === null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Blocked starts must not carry a session or plan and must include typed recovery." });
+    }
+    if ((result.blocked_reason === "task_not_found" || result.blocked_reason === "task_outside_course") !== (result.task === null)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Only absent or foreign tasks may be omitted from a blocked result.", path: ["task"] });
+    }
+    if (result.task !== null && result.task.course_id !== result.course_id) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A visible blocked task must belong to the response course.", path: ["task", "course_id"] });
+    }
+    return;
+  }
+  if (result.task === null || result.session === null || result.blocked_reason !== null || result.recovery_action !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Successful starts must include a task and session without blocked recovery." });
+    return;
+  }
+  if (result.task.course_id !== result.course_id || result.session.course_id !== result.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Study session start entities must share course scope." });
+  }
+  if (result.outcome === "session_created") {
+    if (result.plan === null || result.session.originating_task_id !== result.task.id || result.plan?.session_id !== result.session.id || result.task.concept_id === null || !result.plan?.units.every((unit) => unit.concept_ids.includes(result.task!.concept_id!))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A created session must include its matching originating task and plan." });
+    }
+  } else if (result.plan !== null || (result.task.source_type === "study_session" ? result.task.source_id !== result.session.id : result.session.originating_task_id !== result.task.id)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A resumed session must omit the plan and match its originating task when provable." });
+  }
+});
+
+export const studySessionReadResponseSchema = z.object({
+  outcome: z.enum(["ready", "plan_unavailable"]),
+  course_id: learningIdentifierSchema,
+  session: autonomousStudySessionSchema,
+  plan: autonomousStudyPlanSchema.nullable(),
+  current_unit_id: z.string().min(1).max(256).nullable(),
+  recovery_action: z.string().min(1).max(500).nullable(),
+}).strict().superRefine((result, context) => {
+  if (result.session.course_id !== result.course_id) context.addIssue({ code: z.ZodIssueCode.custom, message: "Study session must belong to the response course.", path: ["session", "course_id"] });
+  if (result.outcome === "ready") {
+    if (result.plan === null || result.recovery_action !== null || result.plan?.session_id !== result.session.id || (result.current_unit_id !== null && !result.plan?.units.some((unit) => unit.id === result.current_unit_id))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A ready study session must have its matching plan and an in-plan current unit." });
+    }
+  } else if (result.plan !== null || result.current_unit_id !== null || result.recovery_action === null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A plan-unavailable session must provide only recovery guidance." });
+  }
+});
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -552,6 +680,13 @@ export type ConceptBootstrap = z.infer<typeof conceptBootstrapSchema>;
 export type LearningSnapshot = z.infer<typeof learningSnapshotSchema>;
 export type AutonomousRecommendationRequest = z.input<typeof autonomousRecommendationRequestSchema>;
 export type AutonomousRecommendationResponse = z.infer<typeof autonomousRecommendationResponseSchema>;
+export type AutonomousStudySessionRequest = z.input<typeof autonomousStudySessionRequestSchema>;
+export type AutonomousStudyTask = z.infer<typeof autonomousStudyTaskSchema>;
+export type AutonomousStudySessionUnit = z.infer<typeof autonomousStudySessionUnitSchema>;
+export type AutonomousStudyPlan = z.infer<typeof autonomousStudyPlanSchema>;
+export type AutonomousStudySession = z.infer<typeof autonomousStudySessionSchema>;
+export type AutonomousStudySessionStartResponse = z.infer<typeof autonomousStudySessionStartResponseSchema>;
+export type StudySessionReadResponse = z.infer<typeof studySessionReadResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

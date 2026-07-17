@@ -23,6 +23,8 @@ import {
   answerStreamEventSchema,
   autonomousRecommendationRequestSchema,
   autonomousRecommendationResponseSchema,
+  autonomousStudySessionRequestSchema,
+  autonomousStudySessionStartResponseSchema,
   courseCreateRequestSchema,
   courseCreateResponseSchema,
   demoStateSchema,
@@ -36,6 +38,7 @@ import {
   indexJobListResponseSchema,
   indexJobSchema,
   learningSnapshotSchema,
+  studySessionReadResponseSchema,
   searchResponseSchema,
   type DemoState,
   type CourseCreateRequest,
@@ -43,6 +46,8 @@ import {
   type AnswerStreamEvent,
   type AutonomousRecommendationRequest,
   type AutonomousRecommendationResponse,
+  type AutonomousStudySessionRequest,
+  type AutonomousStudySessionStartResponse,
   type DocumentImportResponse,
   type DocumentCourseLinkResponse,
   type GroundedQueryResponse,
@@ -50,6 +55,7 @@ import {
   type IndexJob,
   type IndexedDocument,
   type LearningSnapshot,
+  type StudySessionReadResponse,
   type SearchResponse,
 } from "./schemas";
 
@@ -428,6 +434,44 @@ export class LearningCoreClient {
             && result.bootstrap.document_id === parsed.data.document_id)
       ),
     });
+  }
+
+  startAutonomousStudySession(
+    request: AutonomousStudySessionRequest,
+    options: RequestOptions = {},
+  ): Promise<AutonomousStudySessionStartResponse> {
+    const parsed = autonomousStudySessionRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError("/v1/autonomous-study-sessions");
+    return this.#request("/v1/autonomous-study-sessions", autonomousStudySessionStartResponseSchema, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed.data),
+      signal: options.signal,
+    }, {
+      expectedStatuses: [200, 201],
+      validate: (status, result) => (
+        (status === 201) === (result.outcome === "session_created")
+        && result.course_id === parsed.data.course_id
+        && (result.task === null || result.task.id === parsed.data.task_id)
+      ),
+    });
+  }
+
+  getStudySession(
+    sessionId: string,
+    courseId: string,
+    options: RequestOptions = {},
+  ): Promise<StudySessionReadResponse> {
+    const path = "/v1/study-sessions/{session_id}";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(courseId, path);
+    const params = new URLSearchParams({ course_id: courseId });
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}?${params.toString()}`,
+      studySessionReadResponseSchema,
+      options,
+      { expectedStatuses: [200], validate: (_status, result) => result.course_id === courseId && result.session.id === sessionId },
+    );
   }
 
   uploadDocument(file: File, courseId?: string, options: RequestOptions = {}): Promise<DocumentImportResponse> {

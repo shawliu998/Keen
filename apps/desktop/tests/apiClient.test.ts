@@ -340,6 +340,52 @@ describe("LearningCoreClient security boundary", () => {
     await expect(invalid.learningSnapshot({ courseId: "course-1", availableMinutes: 20 })).rejects.toBeInstanceOf(LearningCoreSchemaError);
   });
 
+  it("validates autonomous study session start and persisted reader scope", async () => {
+    const task = { id: "task-1", course_id: "course-1", concept_id: "concept-1", title: "Study limits", reason: "Weak mastery.", estimated_minutes: 20, status: "upcoming", source_type: "weak_concept", source_id: "concept-1" } as const;
+    const session = { id: "session-1", course_id: "course-1", originating_task_id: "task-1", title: "Study limits", mode: "study", goal: "Build a grounded understanding.", estimated_minutes: 20, status: "studying", progress: 0.25, revision: 1, created_at: "2026-07-17T10:00:00+00:00", updated_at: "2026-07-17T10:00:00+00:00", started_at: "2026-07-17T10:00:00+00:00" } as const;
+    const plan = { id: "plan-1", session_id: "session-1", version: 1, rationale: "Indexed course evidence is available.", units: [
+      { id: "unit-1", ordinal: 0, concept_id: "concept-1", concept_ids: ["concept-1"], source_chunk_ids: ["chunk-1"], title: "First source segment", objective: "Read the source.", content: "Untrusted source display text.", estimated_minutes: 10, status: "active" },
+      { id: "unit-2", ordinal: 1, concept_id: "concept-1", concept_ids: ["concept-1"], source_chunk_ids: ["chunk-2"], title: "Second source segment", objective: "Connect the source.", content: "More display text.", estimated_minutes: 10, status: "ready" },
+    ] } as const;
+    const start = { outcome: "session_created" as const, course_id: "course-1", task, session, plan, blocked_reason: null, recovery_action: null };
+    const read = { outcome: "ready" as const, course_id: "course-1", session, plan, current_unit_id: "unit-1", recovery_action: null };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(start, 201)).mockResolvedValueOnce(jsonResponse(read));
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+    await expect(client.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).resolves.toEqual(start);
+    await expect(client.getStudySession("session-1", "course-1")).resolves.toEqual(read);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8080/v1/autonomous-study-sessions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("http://127.0.0.1:8080/v1/study-sessions/session-1?course_id=course-1");
+
+    const wrongStatus = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(start)) as unknown as typeof fetch);
+    await expect(wrongStatus.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+    const wrongRead = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ ...read, course_id: "course-2", session: { ...session, course_id: "course-2" } })) as unknown as typeof fetch);
+    await expect(wrongRead.getStudySession("session-1", "course-1")).rejects.toBeInstanceOf(LearningCoreSchemaError);
+    const unavailablePlan = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ ...read, outcome: "plan_unavailable", plan: null, current_unit_id: null, recovery_action: "Return to the feed." })) as unknown as typeof fetch);
+    await expect(unavailablePlan.getStudySession("session-1", "course-1")).resolves.toMatchObject({ outcome: "plan_unavailable" });
+
+    const resumed = { ...start, outcome: "resumed" as const, plan: null };
+    const resumedClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(resumed)) as unknown as typeof fetch);
+    await expect(resumedClient.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).resolves.toEqual(resumed);
+    const sourceTask = { ...task, source_type: "study_session", source_id: "session-1" };
+    const sourceResumed = { ...resumed, task: sourceTask, session: { ...session, originating_task_id: null } };
+    const sourceClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(sourceResumed)) as unknown as typeof fetch);
+    await expect(sourceClient.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).resolves.toEqual(sourceResumed);
+    const wrongSourceClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ ...sourceResumed, task: { ...sourceTask, source_id: "session-other" } })) as unknown as typeof fetch);
+    await expect(wrongSourceClient.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
+
+    const visibleTaskReasons = ["task_not_actionable", "task_not_autonomous", "task_missing_concept", "source_session_unavailable", "originating_session_terminal", "no_indexed_source"] as const;
+    for (const reason of visibleTaskReasons) {
+      const blocked = { outcome: "blocked" as const, course_id: "course-1", task, session: null, plan: null, blocked_reason: reason, recovery_action: "Use the typed recovery." };
+      const blockedClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(blocked)) as unknown as typeof fetch);
+      await expect(blockedClient.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).resolves.toEqual(blocked);
+    }
+    for (const reason of ["task_not_found", "task_outside_course"] as const) {
+      const blocked = { outcome: "blocked" as const, course_id: "course-1", task: null, session: null, plan: null, blocked_reason: reason, recovery_action: "Use the typed recovery." };
+      const blockedClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse(blocked)) as unknown as typeof fetch);
+      await expect(blockedClient.startAutonomousStudySession({ course_id: "course-1", task_id: "task-1" })).resolves.toEqual(blocked);
+    }
+  });
+
   it("uploads a browser File as multipart without overriding its Content-Type", async () => {
     const imported = {
       document: { id: "doc-1", name: "notes.txt", mimeType: "text/plain", sizeBytes: 5, contentHash: "c".repeat(64), status: "queued", pageCount: 0, chunkCount: 0, parser: "plain-text", createdAt: "2026-07-15T12:00:00+00:00", error: null, courseIds: ["course-a"], ...pendingCapability },
