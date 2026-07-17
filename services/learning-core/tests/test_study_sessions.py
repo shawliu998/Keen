@@ -179,6 +179,10 @@ def test_repository_selects_latest_plan_or_plan_containing_current_unit(reposito
     )
     assert repo.get_current_or_latest_plan(session["id"])["id"] == "selection-plan-2"
 
+    repo.connection.execute(
+        "UPDATE study_units SET status = 'active' WHERE id = 'selection-v1-unit-1'"
+    )
+    repo.connection.commit()
     repo.transition_session(
         session["id"],
         status="goal_confirmation",

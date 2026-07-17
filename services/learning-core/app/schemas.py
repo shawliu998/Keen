@@ -499,3 +499,62 @@ class StudySessionReadResponse(ApiModel):
     plan: AutonomousStudyPlanResponse | None = None
     current_unit_id: str | None = Field(default=None, max_length=128)
     recovery_action: str | None = Field(default=None, max_length=500)
+
+
+class DiagnosticProgressionRequest(ApiModel):
+    course_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_LEARNING_IDENTIFIER_PATTERN,
+        strict=True,
+    )
+    expected_revision: int = Field(ge=0, strict=True)
+    idempotency_key: str = Field(
+        min_length=16,
+        max_length=128,
+        pattern=_LEARNING_IDENTIFIER_PATTERN,
+        strict=True,
+    )
+
+
+class DiagnosticAnswerRequest(DiagnosticProgressionRequest):
+    response: str = Field(min_length=1, max_length=8_000, strict=True)
+    self_assessment: Literal["not_yet", "partial", "confident"]
+
+    @field_validator("response")
+    @classmethod
+    def response_has_visible_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("response must contain non-whitespace characters")
+        return value
+
+
+class DiagnosticCheckpointResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    unit_id: str = Field(min_length=1, max_length=128)
+    kind: Literal["diagnostic"]
+    prompt: str = Field(min_length=1, max_length=6_000)
+    status: Literal["pending", "answered"]
+
+
+class DiagnosticProgressionResponse(ApiModel):
+    outcome: Literal["applied", "replayed"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: AutonomousStudySessionResponse
+    plan: AutonomousStudyPlanResponse
+    checkpoint: DiagnosticCheckpointResponse
+    current_unit: AutonomousStudySessionUnitResponse | None = None
+    current_unit_id: str | None = Field(default=None, max_length=128)
+    mastery_changed: Literal[False] = False
+    scoring: Literal["not_performed"] = "not_performed"
+
+
+class DiagnosticReadResponse(ApiModel):
+    outcome: Literal["not_started", "pending", "answered"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: AutonomousStudySessionResponse
+    plan: AutonomousStudyPlanResponse
+    checkpoint: DiagnosticCheckpointResponse | None = None
+    current_unit: AutonomousStudySessionUnitResponse | None = None
+    current_unit_id: str | None = Field(default=None, max_length=128)

@@ -155,6 +155,116 @@ def _read_session(client: TestClient, session_id: str, *, course_id: str = COURS
     )
 
 
+def _begin_diagnostic(client: TestClient, session_id: str, revision: int, key: str):
+    return client.post(
+        f"/v1/study-sessions/{session_id}/diagnostic",
+        headers=AUTH,
+        json={
+            "course_id": COURSE_ID,
+            "expected_revision": revision,
+            "idempotency_key": key,
+        },
+    )
+
+
+def test_diagnostic_api_advances_source_grounded_session_without_leaking_response(
+    client: TestClient,
+) -> None:
+    _course_and_concept(client)
+    _indexed_source(client)
+    _task(client, task_id="task-diagnostic-api")
+    created = _start(client, "task-diagnostic-api").json()
+    session = created["session"]
+    begun = _begin_diagnostic(
+        client,
+        session["id"],
+        session["revision"],
+        "diagnostic-api-begin",
+    )
+    assert begun.status_code == 201
+    begun_body = begun.json()
+    assert begun_body["outcome"] == "applied"
+    assert begun_body["session"]["status"] == "diagnosing"
+    assert "not a scored question" in begun_body["checkpoint"]["prompt"]
+    restored = client.get(
+        f"/v1/study-sessions/{session['id']}/diagnostic",
+        headers=AUTH,
+        params={"course_id": COURSE_ID},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["outcome"] == "pending"
+    assert restored.json()["checkpoint"]["id"] == begun_body["checkpoint"]["id"]
+    answered = client.post(
+        f"/v1/study-sessions/{session['id']}/diagnostic/{begun_body['checkpoint']['id']}/answer",
+        headers=AUTH,
+        json={
+            "course_id": COURSE_ID,
+            "expected_revision": begun_body["session"]["revision"],
+            "idempotency_key": "diagnostic-api-answer",
+            "response": "I can differentiate an outer function but need a refresher.",
+            "self_assessment": "partial",
+        },
+    )
+    assert answered.status_code == 201
+    body = answered.json()
+    assert body["outcome"] == "applied"
+    assert body["mastery_changed"] is False
+    assert body["scoring"] == "not_performed"
+    assert body["session"]["status"] == "studying"
+    assert body["current_unit"]["status"] == "active"
+    assert "response" not in body["checkpoint"]
+    restored_answered = client.get(
+        f"/v1/study-sessions/{session['id']}/diagnostic",
+        headers=AUTH,
+        params={"course_id": COURSE_ID},
+    )
+    assert restored_answered.status_code == 200
+    assert restored_answered.json()["outcome"] == "answered"
+    assert "response" not in restored_answered.json()["checkpoint"]
+    replay = client.post(
+        f"/v1/study-sessions/{session['id']}/diagnostic/{begun_body['checkpoint']['id']}/answer",
+        headers=AUTH,
+        json={
+            "course_id": COURSE_ID,
+            "expected_revision": begun_body["session"]["revision"],
+            "idempotency_key": "diagnostic-api-answer",
+            "response": "I can differentiate an outer function but need a refresher.",
+            "self_assessment": "partial",
+        },
+    )
+    assert replay.status_code == 200
+    assert replay.json()["outcome"] == "replayed"
+
+
+def test_diagnostic_foreign_session_and_missing_session_are_indistinguishable(
+    client: TestClient,
+) -> None:
+    _course_and_concept(client)
+    _indexed_source(client)
+    _task(client, task_id="task-diagnostic-scope")
+    created = _start(client, "task-diagnostic-scope").json()["session"]
+    foreign = client.post(
+        f"/v1/study-sessions/{created['id']}/diagnostic",
+        headers=AUTH,
+        json={
+            "course_id": "course-physics",
+            "expected_revision": created["revision"],
+            "idempotency_key": "diagnostic-scope-key",
+        },
+    )
+    missing = client.post(
+        "/v1/study-sessions/missing-session/diagnostic",
+        headers=AUTH,
+        json={
+            "course_id": "course-physics",
+            "expected_revision": created["revision"],
+            "idempotency_key": "diagnostic-scope-key",
+        },
+    )
+    assert foreign.status_code == missing.status_code == 404
+    assert foreign.json() == missing.json()
+
+
 def test_autonomous_study_task_response_bounds_source_id_without_rejecting_empty_legacy_value() -> (
     None
 ):
@@ -476,6 +586,10 @@ def test_read_session_get_keeps_one_snapshot_during_concurrent_current_unit_upda
         pending = executor.submit(_read_session, client, session_id)
         session_read.wait()
         with client.app.state.database.connection() as writer:
+            writer.execute(
+                "UPDATE study_units SET status = 'active' WHERE id = ?",
+                (current_unit_id,),
+            )
             writer.execute(
                 """
                 UPDATE study_sessions

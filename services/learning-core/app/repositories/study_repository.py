@@ -444,6 +444,220 @@ class StudyRepository:
             ).fetchone()
         )
 
+    def create_diagnostic_checkpoint(
+        self,
+        *,
+        checkpoint_id: str,
+        session_id: str,
+        unit_id: str,
+        prompt: str,
+        idempotency_key: str,
+        payload_fingerprint: str,
+        created_at: str | None = None,
+        commit: bool = True,
+    ) -> tuple[dict, bool]:
+        """Create one diagnostic checkpoint, replaying only the same request."""
+
+        existing = self.connection.execute(
+            "SELECT * FROM study_checkpoints WHERE diagnostic_begin_idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if existing is not None:
+            item = dict(existing)
+            if (
+                item["session_id"] != session_id
+                or item["unit_id"] != unit_id
+                or item["kind"] != "diagnostic"
+                or item["diagnostic_begin_payload_fingerprint"] != payload_fingerprint
+            ):
+                raise ValueError("diagnostic begin idempotency key was reused")
+            return item, False
+        now = created_at or _now()
+        with write_scope(self.connection, commit=commit):
+            self.connection.execute(
+                """
+                INSERT INTO study_checkpoints
+                    (id, session_id, unit_id, kind, prompt, response, status, created_at,
+                     answered_at, diagnostic_begin_idempotency_key,
+                     diagnostic_begin_payload_fingerprint)
+                VALUES (?, ?, ?, 'diagnostic', ?, NULL, 'pending', ?, NULL, ?, ?)
+                """,
+                (
+                    checkpoint_id,
+                    session_id,
+                    unit_id,
+                    prompt,
+                    now,
+                    idempotency_key,
+                    payload_fingerprint,
+                ),
+            )
+            self._append_event(
+                session_id, "checkpoint_created", {"checkpoint_id": checkpoint_id}, now
+            )
+        row = self.connection.execute(
+            "SELECT * FROM study_checkpoints WHERE id = ?", (checkpoint_id,)
+        ).fetchone()
+        if row is None:  # pragma: no cover - guarded by insert
+            raise RuntimeError("diagnostic checkpoint insert did not persist")
+        return dict(row), True
+
+    def get_checkpoint(self, checkpoint_id: str) -> dict | None:
+        row = self.connection.execute(
+            "SELECT * FROM study_checkpoints WHERE id = ?", (checkpoint_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def answer_diagnostic_checkpoint(
+        self,
+        *,
+        checkpoint_id: str,
+        response: str,
+        idempotency_key: str,
+        payload_fingerprint: str,
+        mastery_evidence_id: str,
+        answered_at: str | None = None,
+        commit: bool = True,
+    ) -> tuple[dict, bool]:
+        """Persist one unscored diagnostic reflection with durable replay semantics."""
+
+        existing = self.get_checkpoint(checkpoint_id)
+        if existing is None:
+            raise LookupError("study checkpoint not found")
+        if existing["diagnostic_answer_idempotency_key"] is not None:
+            if (
+                existing["diagnostic_answer_idempotency_key"] != idempotency_key
+                or existing["diagnostic_answer_payload_fingerprint"]
+                != payload_fingerprint
+            ):
+                raise ValueError("diagnostic answer is already recorded")
+            return existing, False
+        if existing["kind"] != "diagnostic" or existing["status"] != "pending":
+            raise ValueError("diagnostic checkpoint is not pending")
+        now = answered_at or _now()
+        with write_scope(self.connection, commit=commit):
+            cursor = self.connection.execute(
+                """
+                UPDATE study_checkpoints
+                SET response = ?, status = 'answered', answered_at = ?,
+                    diagnostic_answer_idempotency_key = ?,
+                    diagnostic_answer_payload_fingerprint = ?, mastery_evidence_id = ?
+                WHERE id = ? AND status = 'pending'
+                  AND diagnostic_answer_idempotency_key IS NULL
+                """,
+                (
+                    response,
+                    now,
+                    idempotency_key,
+                    payload_fingerprint,
+                    mastery_evidence_id,
+                    checkpoint_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("diagnostic checkpoint revision conflict")
+            self._append_event(
+                existing["session_id"],
+                "checkpoint_answered",
+                {"checkpoint_id": checkpoint_id, "kind": "diagnostic"},
+                now,
+            )
+        updated = self.get_checkpoint(checkpoint_id)
+        if updated is None:  # pragma: no cover
+            raise RuntimeError("diagnostic checkpoint disappeared")
+        return updated, True
+
+    def activate_first_unit(
+        self,
+        *,
+        unit_id: str,
+        session_id: str,
+        updated_at: str | None = None,
+        commit: bool = True,
+    ) -> dict:
+        """Move only a ready unit belonging to a session into the active state."""
+
+        now = updated_at or _now()
+        with write_scope(self.connection, commit=commit):
+            cursor = self.connection.execute(
+                """
+                UPDATE study_units
+                SET status = 'active', updated_at = ?
+                WHERE id = ? AND status = 'ready' AND EXISTS (
+                    SELECT 1 FROM study_plan_versions p
+                    WHERE p.id = study_units.plan_version_id AND p.session_id = ?
+                )
+                """,
+                (now, unit_id, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("study unit is not ready for activation")
+            self._append_event(
+                session_id,
+                "unit_changed",
+                {"unit_id": unit_id, "from": "ready", "to": "active"},
+                now,
+            )
+        row = self.connection.execute(
+            "SELECT * FROM study_units WHERE id = ?", (unit_id,)
+        ).fetchone()
+        if row is None:  # pragma: no cover
+            raise RuntimeError("study unit disappeared")
+        result = dict(row)
+        result["concept_ids"] = load_json(result.pop("concept_ids_json"))
+        result["source_chunk_ids"] = load_json(result.pop("source_chunk_ids_json"))
+        return result
+
+    def clear_current_unit(
+        self,
+        *,
+        session_id: str,
+        expected_revision: int,
+        updated_at: str | None = None,
+        commit: bool = True,
+    ) -> dict:
+        """CAS-clear the active-unit pointer inside a caller-owned unit swap.
+
+        This deliberately cannot commit independently: a persisted null pointer
+        while the old unit remains active would be a durable half-transition.
+        The enclosing operation owns the only revision/event for the complete
+        swap and must commit or roll back all unit and pointer writes together.
+        """
+
+        if commit:
+            raise ValueError("clear_current_unit requires commit=False")
+        now = updated_at or _now()
+        with write_scope(self.connection, commit=commit):
+            active = self.connection.execute(
+                """
+                SELECT s.current_unit_id, u.status
+                FROM study_sessions s
+                LEFT JOIN study_units u ON u.id = s.current_unit_id
+                WHERE s.id = ? AND s.revision = ?
+                """,
+                (session_id, expected_revision),
+            ).fetchone()
+            if (
+                active is None
+                or active["current_unit_id"] is None
+                or active["status"] != "active"
+            ):
+                raise RuntimeError("study session revision conflict")
+            cursor = self.connection.execute(
+                """
+                UPDATE study_sessions
+                SET current_unit_id = NULL, updated_at = ?
+                WHERE id = ? AND revision = ? AND current_unit_id IS NOT NULL
+                """,
+                (now, session_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("study session revision conflict")
+            # This is only the pointer half of a caller-controlled unit swap.
+            # Emitting ``unit_changed`` here would falsely claim that the unit
+            # itself stopped being active before its status is actually changed.
+        return self._require_session(session_id)
+
     def recover_active_sessions(self, *, commit: bool = True) -> list[str]:
         now = _now()
         active = tuple(

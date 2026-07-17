@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+import sqlite3
 from threading import Barrier
 
 import pytest
@@ -10,6 +11,7 @@ from app.database import Database
 from app.repositories.study_repository import StudyRepository
 from app.repositories.task_repository import TaskRepository
 from app.services.autonomous_study_session import AutonomousStudySessionService
+from app.services.diagnostic_progression import DiagnosticProgressionService
 from app.services.study_session_read import StudySessionReadService
 
 
@@ -188,6 +190,304 @@ def test_study_session_read_service_restores_persisted_plan_after_reopen(
     assert outside is None
 
 
+def test_diagnostic_reflection_advances_to_first_real_unit_without_mastery_update(
+    tmp_path,
+) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        session_id = str(created.session["id"])
+        service = DiagnosticProgressionService(connection)
+        begun = service.begin(
+            course_id="course-calculus",
+            session_id=session_id,
+            expected_revision=int(created.session["revision"]),
+            idempotency_key="begin-diagnostic-1",
+            now=NOW,
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE study_checkpoints SET prompt = 'changed' WHERE id = ?",
+                (begun.checkpoint["id"],),
+            )
+        before = connection.execute(
+            "SELECT probability, attempts FROM mastery WHERE concept_id = 'concept-chain-rule'"
+        ).fetchone()
+        task_before = connection.execute(
+            "SELECT status FROM study_tasks WHERE id = 'autonomous-task'"
+        ).fetchone()["status"]
+        answered = service.answer(
+            course_id="course-calculus",
+            session_id=session_id,
+            checkpoint_id=str(begun.checkpoint["id"]),
+            expected_revision=int(begun.session["revision"]),
+            idempotency_key="answer-diagnostic-1",
+            response="I remember the outer derivative rule, but not the full chain.",
+            self_assessment="partial",
+            now=NOW,
+        )
+        replay = service.answer(
+            course_id="course-calculus",
+            session_id=session_id,
+            checkpoint_id=str(begun.checkpoint["id"]),
+            expected_revision=int(begun.session["revision"]),
+            idempotency_key="answer-diagnostic-1",
+            response="I remember the outer derivative rule, but not the full chain.",
+            self_assessment="partial",
+            now=NOW,
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE study_units SET status = 'ready' WHERE id = ?",
+                (answered.current_unit["id"],),
+            )
+        after = connection.execute(
+            "SELECT probability, attempts FROM mastery WHERE concept_id = 'concept-chain-rule'"
+        ).fetchone()
+        evidence = connection.execute(
+            "SELECT evidence_type, correctness, independence, hint_level, weight FROM mastery_evidence"
+        ).fetchall()
+        event_count = connection.execute(
+            "SELECT COUNT(*) FROM mastery_events"
+        ).fetchone()[0]
+        review_count = connection.execute(
+            "SELECT COUNT(*) FROM review_schedules"
+        ).fetchone()[0]
+        task_after = connection.execute(
+            "SELECT status FROM study_tasks WHERE id = 'autonomous-task'"
+        ).fetchone()["status"]
+
+    assert begun.outcome == "applied"
+    assert begun.session["status"] == "diagnosing"
+    assert begun.current_unit is None
+    assert answered.outcome == "applied"
+    assert answered.session["status"] == "studying"
+    assert answered.current_unit is not None
+    assert answered.current_unit["status"] == "active"
+    assert answered.session["current_unit_id"] == answered.current_unit["id"]
+    assert replay.outcome == "replayed"
+    assert before == after
+    assert task_before == task_after == "upcoming"
+    assert event_count == 0
+    assert review_count == 0
+    assert len(evidence) == 1
+    assert dict(evidence[0]) == {
+        "evidence_type": "user_report",
+        "correctness": 0.5,
+        "independence": 0.0,
+        "hint_level": 0,
+        "weight": 0.0,
+    }
+
+
+def test_diagnostic_rejects_stale_revision_and_reused_key_with_different_payload(
+    tmp_path,
+) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        service = DiagnosticProgressionService(connection)
+        session_id = str(created.session["id"])
+        begun = service.begin(
+            course_id="course-calculus",
+            session_id=session_id,
+            expected_revision=int(created.session["revision"]),
+            idempotency_key="begin-diagnostic-2",
+            now=NOW,
+        )
+        with pytest.raises((RuntimeError, ValueError)):
+            service.begin(
+                course_id="course-calculus",
+                session_id=session_id,
+                expected_revision=1,
+                idempotency_key="other-begin-key",
+                now=NOW,
+            )
+        with pytest.raises(RuntimeError):
+            service.answer(
+                course_id="course-calculus",
+                session_id=session_id,
+                checkpoint_id=str(begun.checkpoint["id"]),
+                expected_revision=int(begun.session["revision"]),
+                idempotency_key="answer-diagnostic-2",
+                response="first response",
+                self_assessment="not_yet",
+                now=NOW,
+            )
+            service.answer(
+                course_id="course-calculus",
+                session_id=session_id,
+                checkpoint_id=str(begun.checkpoint["id"]),
+                expected_revision=int(begun.session["revision"]),
+                idempotency_key="answer-diagnostic-2",
+                response="changed response",
+                self_assessment="not_yet",
+                now=NOW,
+            )
+
+
+@pytest.mark.parametrize(
+    ("assessment", "correctness"),
+    (("not_yet", 0.0), ("partial", 0.5), ("confident", 1.0)),
+)
+def test_diagnostic_self_assessment_is_zero_weight_user_report(
+    tmp_path, assessment: str, correctness: float
+) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        service = DiagnosticProgressionService(connection)
+        begun = service.begin(
+            course_id="course-calculus",
+            session_id=str(created.session["id"]),
+            expected_revision=int(created.session["revision"]),
+            idempotency_key=f"begin-assessment-{assessment}",
+            now=NOW,
+        )
+        service.answer(
+            course_id="course-calculus",
+            session_id=str(created.session["id"]),
+            checkpoint_id=str(begun.checkpoint["id"]),
+            expected_revision=int(begun.session["revision"]),
+            idempotency_key=f"answer-assessment-{assessment}",
+            response="A non-scored reflection.",
+            self_assessment=assessment,
+            now=NOW,
+        )
+        evidence = connection.execute(
+            "SELECT correctness, weight, evidence_type FROM mastery_evidence"
+        ).fetchone()
+    assert dict(evidence) == {
+        "correctness": correctness,
+        "weight": 0.0,
+        "evidence_type": "user_report",
+    }
+
+
+def test_diagnostic_exact_replays_survive_later_legal_paused_state(tmp_path) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        session_id = str(created.session["id"])
+        service = DiagnosticProgressionService(connection)
+        begun = service.begin(
+            course_id="course-calculus",
+            session_id=session_id,
+            expected_revision=int(created.session["revision"]),
+            idempotency_key="begin-replay-paused",
+            now=NOW,
+        )
+        answered = service.answer(
+            course_id="course-calculus",
+            session_id=session_id,
+            checkpoint_id=str(begun.checkpoint["id"]),
+            expected_revision=int(begun.session["revision"]),
+            idempotency_key="answer-replay-paused",
+            response="I know some prerequisite material.",
+            self_assessment="partial",
+            now=NOW,
+        )
+        paused = StudyRepository(connection).transition_session(
+            session_id,
+            status="paused",
+            expected_revision=int(answered.session["revision"]),
+            updated_at=NOW.isoformat(),
+        )
+        replay = service.answer(
+            course_id="course-calculus",
+            session_id=session_id,
+            checkpoint_id=str(begun.checkpoint["id"]),
+            expected_revision=int(begun.session["revision"]),
+            idempotency_key="answer-replay-paused",
+            response="I know some prerequisite material.",
+            self_assessment="partial",
+            now=NOW,
+        )
+        events = connection.execute(
+            "SELECT event_type FROM study_session_events WHERE session_id = ? ORDER BY sequence",
+            (session_id,),
+        ).fetchall()
+    assert paused["status"] == "paused"
+    assert replay.outcome == "replayed"
+    assert replay.session["status"] == "paused"
+    assert [row["event_type"] for row in events][-5:] == [
+        "checkpoint_answered",
+        "status_changed",
+        "unit_changed",
+        "status_changed",
+        "status_changed",
+    ]
+
+
+def test_diagnostic_migration_freezes_answered_identity_and_evidence(tmp_path) -> None:
+    database = _database(tmp_path)
+    with database.connection() as connection:
+        _indexed_source(connection)
+        _recommendation_task(connection)
+        created = AutonomousStudySessionService(connection).start_or_resume(
+            course_id="course-calculus", task_id="autonomous-task", now=NOW
+        )
+        assert created.session is not None
+        service = DiagnosticProgressionService(connection)
+        begun = service.begin(
+            course_id="course-calculus",
+            session_id=str(created.session["id"]),
+            expected_revision=int(created.session["revision"]),
+            idempotency_key="begin-immutable-diagnostic",
+            now=NOW,
+        )
+        answered = service.answer(
+            course_id="course-calculus",
+            session_id=str(created.session["id"]),
+            checkpoint_id=str(begun.checkpoint["id"]),
+            expected_revision=int(begun.session["revision"]),
+            idempotency_key="answer-immutable-diagnostic",
+            response="A reflection that is intentionally not graded.",
+            self_assessment="confident",
+            now=NOW,
+        )
+        checkpoint_id = str(answered.checkpoint["id"])
+        evidence_id = connection.execute(
+            "SELECT mastery_evidence_id FROM study_checkpoints WHERE id = ?",
+            (checkpoint_id,),
+        ).fetchone()[0]
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE study_checkpoints SET diagnostic_begin_payload_fingerprint = ? WHERE id = ?",
+                ("b" * 64, checkpoint_id),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE mastery_evidence SET created_at = ? WHERE id = ?",
+                ("2026-07-18T00:00:00+00:00", evidence_id),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE study_checkpoints SET status = 'skipped' WHERE id = ?",
+                (checkpoint_id,),
+            )
+
+
 @pytest.mark.parametrize(
     "corruption",
     (
@@ -253,6 +553,7 @@ def test_study_session_read_service_fails_closed_for_corrupt_relationships(
                 created_at=NOW.isoformat(),
             )
             connection.execute("DROP TRIGGER study_sessions_current_unit_update")
+            connection.execute("DROP TRIGGER study_sessions_current_unit_active_update")
             connection.execute(
                 "UPDATE study_sessions SET current_unit_id = 'foreign-current-unit-1' WHERE id = ?",
                 (session_id,),
