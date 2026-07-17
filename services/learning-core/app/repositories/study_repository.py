@@ -133,6 +133,42 @@ class StudyRepository:
             result[column.removesuffix("_json")] = load_json(result.pop(column))
         return result
 
+    def list_incomplete_for_course(
+        self, course_id: str, *, limit: int = 50
+    ) -> list[dict]:
+        """List resumable sessions for one course in a stable order.
+
+        This is deliberately read-only.  ``draft`` sessions are included because
+        they are recoverable learning work, while terminal sessions are excluded.
+        """
+
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 200
+        ):
+            raise ValueError("limit must be between 1 and 200")
+        rows = self.connection.execute(
+            """
+            SELECT * FROM study_sessions
+            WHERE course_id = ?
+              AND status NOT IN ('completed', 'cancelled', 'failed')
+            ORDER BY
+                CASE WHEN status = 'paused' THEN 0 ELSE 1 END,
+                updated_at,
+                id
+            LIMIT ?
+            """,
+            (course_id, limit),
+        ).fetchall()
+        result: list[dict] = []
+        for row in rows:
+            session = dict(row)
+            for column in ("goal_scope_json", "preferences_json", "difficulty_json"):
+                session[column.removesuffix("_json")] = load_json(session.pop(column))
+            result.append(session)
+        return result
+
     def transition_session(
         self,
         session_id: str,

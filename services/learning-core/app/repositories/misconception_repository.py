@@ -113,6 +113,32 @@ class MisconceptionRepository:
         ).fetchall()
         return [_decode_misconception(row) for row in rows]
 
+    def list_actionable_for_course(
+        self, course_id: str, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """List unresolved misconceptions with their persisted evidence count."""
+
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 200
+        ):
+            raise ValueError("limit must be between 1 and 200")
+        rows = self.connection.execute(
+            """
+            SELECT m.*, COUNT(e.id) AS evidence_count
+            FROM misconceptions AS m
+            LEFT JOIN misconception_evidence AS e ON e.misconception_id = m.id
+            WHERE m.course_id = ?
+              AND m.status IN ('suspected', 'confirmed', 'improving')
+            GROUP BY m.id
+            ORDER BY evidence_count DESC, m.last_seen_at DESC, m.id
+            LIMIT ?
+            """,
+            (course_id, limit),
+        ).fetchall()
+        return [_decode_misconception(row) for row in rows]
+
     def add_evidence(
         self,
         *,

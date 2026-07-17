@@ -103,6 +103,12 @@ capture, accessibility scan or visual-diff artifact was produced for this
 state. Its layout and error states therefore remain implemented but visually
 unverified, and no parity claim is made.
 
+2026-07-17 autonomous-foundation note: indexed-document concept bootstrap and
+the deterministic Learning Snapshot are backend-only building blocks. They add
+no rendered Agent status, Feed recommendation, Deep Learn state, screenshot or
+visual-diff evidence. All autonomous-learning visual rows therefore remain
+Missing; no product-flow or parity claim is made from backend tests.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

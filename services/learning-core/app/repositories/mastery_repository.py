@@ -98,6 +98,50 @@ class MasteryRepository:
         ).fetchone()
         return _decode_evidence(row) if row is not None else None
 
+    def list_for_course(
+        self, course_id: str, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return persisted mastery states scoped to one course.
+
+        Concepts without a mastery row are returned with ``probability`` and
+        related state fields set to ``None``.  Callers must not manufacture a
+        probability for this explicit state gap.
+        """
+
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 200
+        ):
+            raise ValueError("limit must be between 1 and 200")
+        rows = self.connection.execute(
+            """
+            SELECT c.id AS concept_id, c.name AS concept_name,
+                   m.probability, m.attempts, m.updated_at
+            FROM concepts AS c
+            LEFT JOIN mastery AS m ON m.concept_id = c.id
+            WHERE c.course_id = ?
+            ORDER BY m.probability IS NULL, m.probability, m.updated_at, c.id
+            LIMIT ?
+            """,
+            (course_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_missing_for_course(self, course_id: str) -> int:
+        """Count concepts that have no persisted mastery state for a course."""
+
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS missing_count
+            FROM concepts AS c
+            LEFT JOIN mastery AS m ON m.concept_id = c.id
+            WHERE c.course_id = ? AND m.concept_id IS NULL
+            """,
+            (course_id,),
+        ).fetchone()
+        return int(row["missing_count"])
+
     def list_evidence(self, concept_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
