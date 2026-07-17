@@ -315,9 +315,13 @@ status, headers, returned_pdf = request(f"/v1/documents/{pdf_document_id}/conten
 assert status == 200 and headers.get_content_type() == "application/pdf"
 assert returned_pdf == normal_pdf
 with sqlite3.connect(database_path) as connection:
-    assert connection.execute(
-        "SELECT COUNT(*) FROM schema_migrations WHERE version = 8"
-    ).fetchone()[0] == 1
+    applied_migrations = [
+        row[0]
+        for row in connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    ]
+    assert applied_migrations == list(range(1, 22)), applied_migrations
     geometry = connection.execute(
         """
         SELECT original_text, bbox_x0, bbox_y0, bbox_x1, bbox_y1,
@@ -331,6 +335,24 @@ with sqlite3.connect(database_path) as connection:
 assert geometry, "PDF geometry was not persisted"
 assert any("Keen bundled PDF geometry smoke" in row[0] for row in geometry)
 assert all(0 <= row[1] < row[3] <= row[5] and 0 <= row[2] < row[4] <= row[6] for row in geometry)
+
+# Migration 021 and the frozen course-create route must travel together. The
+# second request proves the bundled service replays the same logical mutation.
+course_payload = {
+    "title": "Bundled course creation smoke",
+    "description": "Migration 021 packaging evidence",
+    "idempotencyKey": "bundled-course-smoke-key-0001",
+}
+status, created_course = request_json("/v1/courses", method="POST", payload=course_payload)
+assert status == 201, (status, created_course)
+assert created_course["replayed"] is False, created_course
+status, replayed_course = request_json("/v1/courses", method="POST", payload=course_payload)
+assert status == 200, (status, replayed_course)
+assert replayed_course["replayed"] is True, replayed_course
+assert replayed_course["course"] == created_course["course"], (
+    created_course,
+    replayed_course,
+)
 
 # Same content is one document linked to two real course rows.
 shared = b"Shared thermodynamics source for two course links."

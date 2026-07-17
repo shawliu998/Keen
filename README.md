@@ -4,7 +4,7 @@ Keen is a local-first macOS learning Agent. This repository is in active impleme
 
 ## Current verified slice
 
-- React/Vite desktop experience with the core learning routes, explicit browser Demo state, and a Zod-validated loopback client. In Tauri, Learning Feed reads live tasks/mastery and Knowledge Base lists, imports, and searches live local documents; it does not silently substitute Demo records when the service is unavailable.
+- React/Vite desktop experience with the core learning routes, explicit browser Demo state, and a Zod-validated loopback client. In Tauri, Learning Feed reads live tasks/mastery and Knowledge Base creates local courses, then lists, imports, and searches live local documents; it does not silently substitute Demo records when the service is unavailable.
 - Tauri 2 macOS window configuration, native menu, persisted window state, minimal frontend capabilities, and a supervised learning-core process group. The Python child atomically binds a random `127.0.0.1` port and announces it over its trusted stdout pipe; Rust generates a 256-bit session token, sends it through the child's stdin pipe, performs startup and continuing authenticated health checks, permits one bounded restart, and terminates the full PyInstaller process group on failure or application exit.
 - FastAPI bound to `127.0.0.1` with pre-body Bearer authentication on every endpoint, bounded request bodies, SQLite migrations/demo seed, study-task APIs, deterministic BKT, and generated-answer SSE backed only by an explicitly configured loopback chat provider.
 - Bounded PDF/Markdown/TXT ingestion with extension/MIME/content validation, incremental file hashing/copying, atomic same-hash deduplication, a cross-process database owner lock, SHA-256 content-addressed storage, resource-isolated pypdf 6.14.2 extraction, persisted/recoverable status history, FTS5 search, and deterministic extractive citations with one-based page numbers.
@@ -13,7 +13,9 @@ Keen is a local-first macOS learning Agent. This repository is in active impleme
 - Authenticated, page-on-demand PDF.js citation viewer with a bundled local worker, exact-page navigation, persisted pdfminer line geometry for supported pages, original excerpts, bounded canvases, and an explicit page-only fallback when geometry is unavailable or unsafe.
 - Visual regression capture/diff harness. HyperKnow reference assets are not in this checkout, so the harness records a missing baseline instead of claiming a pixel-match result.
 
-Not implemented: OCR, factual-entailment citation validation, reranking, cloud providers or provider-key storage, the Agent orchestrator/tool permission runtime, and a complete shipped third-party notice bundle. Rotated, translated-box, custom-user-unit, and CropBox-different PDF pages deliberately use page-only citation fallback. The arm64 `.app` and mounted DMG now verify the frozen vector/provider/PDF stack, but Developer ID signing, notarization, universal/Intel builds, and complete notices remain release blockers.
+The Agent has three verified automatic Level 1 reads (`list_study_feed`, `list_due_reviews`, and `search_course_knowledge`) and one verified Level 2 `complete_study_task` proposal: it requires explicit local approval, records an audit trail, performs an atomic task update, and supports Undo. A complete learning loop—from materials and plans through assessments/cards, FSRS review, and mastery updates—is not complete.
+
+Not implemented: OCR, factual-entailment citation validation, reranking, cloud providers or provider-key storage, and a complete shipped third-party notice bundle. Rotated, translated-box, custom-user-unit, and CropBox-different PDF pages deliberately use page-only citation fallback. The arm64 `.app` and mounted DMG now verify the frozen vector/provider/PDF stack, but Developer ID signing, notarization, universal/Intel builds, and complete notices remain release blockers.
 
 See [the implementation plan](docs/IMPLEMENTATION_PLAN.md), [repository audit](docs/REPOSITORY_AUDIT.md), and [visual reference TODO](docs/VISUAL_TODO.md) for exact status and evidence gaps.
 
@@ -29,7 +31,7 @@ See [the implementation plan](docs/IMPLEMENTATION_PLAN.md), [repository audit](d
 ## Web development
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -39,7 +41,7 @@ Open `http://127.0.0.1:1430`. Demo data is local and deterministic; the current 
 
 ```bash
 source "$HOME/.cargo/env"
-npm install
+npm ci
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -e 'services/learning-core[dev]'
 npm run tauri -- dev
@@ -98,7 +100,7 @@ source "$HOME/.cargo/env"
 npm run package:macos
 ```
 
-`build-sidecar.sh` produces a target-triple-suffixed executable under the gitignored `apps/desktop/src-tauri/binaries/`; the override config declares it as Tauri `externalBin`. The default Tauri configuration intentionally disables bundling so a fresh checkout cannot accidentally publish a sidecar-less installer and can still run Rust tests before packaging.
+`build-sidecar.sh` produces a target-triple-suffixed executable under the gitignored `apps/desktop/src-tauri/binaries/`; its preflight requires a continuous migration sequence from `001` through the current highest version (at least `021`), and PyInstaller packages the complete migration directory as data. The override config declares it as Tauri `externalBin`. The default Tauri configuration intentionally disables bundling so a fresh checkout cannot accidentally publish a sidecar-less installer and can still run Rust tests before packaging.
 
 Without `APPLE_SIGNING_IDENTITY`, `package:macos` creates an ad-hoc local
 verification bundle and explicitly disables hardened runtime. This is required

@@ -55,6 +55,17 @@ export const courseSchema = z.object({
   average_mastery: z.number().min(0).max(1).nullable(),
 }).strict();
 
+export const courseCreateRequestSchema = z.object({
+  title: z.string().trim().min(1).max(240),
+  description: z.string().max(8_000).default(""),
+  idempotencyKey: z.string().min(16).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+}).strict();
+
+export const courseCreateResponseSchema = z.object({
+  course: courseSchema,
+  replayed: z.boolean(),
+}).strict();
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -341,6 +352,8 @@ export const answerStreamEventSchema = z.discriminatedUnion("type", [
 export type SidecarConnection = z.infer<typeof sidecarConnectionSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type Course = z.infer<typeof courseSchema>;
+export type CourseCreateRequest = z.input<typeof courseCreateRequestSchema>;
+export type CourseCreateResponse = z.infer<typeof courseCreateResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

@@ -2,27 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilePlus2, Filter, Grid2X2, List, Search, UploadCloud } from "lucide-react";
 import { Badge, Button, Card } from "@keen/ui";
-import { LearningCoreResponseError, type IndexedDocument, type IndexJob } from "@keen/api-client";
+import { LearningCoreResponseError, type IndexJob } from "@keen/api-client";
 import { documents as seedDocuments } from "../../data/seed";
 import { Page, Segmented } from "../../components/Page";
 import { useAppStore } from "../../state/appStore";
 import { isLearningCoreStarting, useLearningCore } from "../../services/LearningCoreProvider";
 import { DocumentCollection } from "./DocumentCollection";
-import { isConfirmedPartialDelete, KnowledgeState, operationError, SearchResults } from "./KnowledgeStates";
+import { CourseCreateForm } from "./CourseCreateForm";
+import { KnowledgeState, SearchResults } from "./KnowledgeStates";
 import {
-  cancellationNotice, isActiveJob, latestJob, toDemoDocument, toDisplayDocument,
-  type CourseOption, type DisplayDocument,
+  isActiveJob, latestJob, toDemoDocument, toDisplayDocument,
+  type DisplayDocument,
 } from "./documentJobs";
-
-type DocumentOperation = "cancelling" | "retrying" | "reindexing" | "deleting" | "linking" | "unlinking";
-const operationLabels: Record<DocumentOperation, string> = {
-  cancelling: "Cancel indexing", retrying: "Retry indexing", deleting: "Delete document",
-  reindexing: "Reindex embeddings", linking: "Link course", unlinking: "Unlink course",
-};
-
-const demoCourses: CourseOption[] = Array.from(new Set(seedDocuments.map((document) => document.course)))
-  .map((title, index) => ({ id: `demo-course-${index + 1}`, title }));
-const demoCourseByTitle = new Map(demoCourses.map((course) => [course.title, course]));
+import { demoCourseByTitle, useKnowledgeCourses } from "./useKnowledgeCourses";
+import { useDocumentActions } from "./useDocumentActions";
 
 export function KnowledgeBasePage() {
   const core = useLearningCore();
@@ -40,29 +33,35 @@ export function KnowledgeBasePage() {
   const [uploading, setUploading] = useState(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const [documentOperationError, setDocumentOperationError] = useState<string | null>(null);
-  const [operations, setOperations] = useState<Record<string, DocumentOperation | undefined>>({});
   const [courseFilter, setCourseFilter] = useState("all");
   const [importCourseId, setImportCourseId] = useState("");
   const isDemo = core.status === "demo";
   const live = core.status === "healthy" && core.client !== null;
-  const courses = useMemo<CourseOption[]>(() => isDemo
-    ? demoCourses
-    : (core.demoState?.courses ?? []).map((course) => ({ id: course.id, title: course.title })), [core.demoState?.courses, isDemo]);
-  const courseTitles = useMemo(() => new Map(courses.map((course) => [course.id, course.title])), [courses]);
+  const courseConnectionId = `${core.client?.baseUrl ?? "none"}:${core.connectionGeneration}`;
+  const { courses, courseTitles, addCreatedCourse } = useKnowledgeCourses({
+    isDemo,
+    persistedCourses: core.demoState?.courses,
+    connectionId: courseConnectionId,
+  });
   const selectedImportCourseId = courses.some((course) => course.id === importCourseId) ? importCourseId : "";
   const documentsKey = useMemo(() => [
     "learning-core",
     "documents",
     core.client?.baseUrl ?? "none",
     core.connectionGeneration,
-  ] as const, [core.client?.baseUrl, core.connectionGeneration]);
+  ] as const, [core.client, core.connectionGeneration]);
   const jobsKeyPrefix = useMemo(() => [
     "learning-core",
     "index-jobs",
     core.client?.baseUrl ?? "none",
     core.connectionGeneration,
   ] as const, [core.client?.baseUrl, core.connectionGeneration]);
+  const courseCacheKey = useMemo(() => [
+    "learning-core",
+    "demo-state",
+    core.client ? Number(new URL(core.client.baseUrl).port) : "none",
+    core.connectionGeneration,
+  ] as const, [core.client, core.connectionGeneration]);
   const jobKey = (documentId: string) => [...jobsKeyPrefix, documentId] as const;
 
   useEffect(() => {
@@ -209,127 +208,13 @@ export function KnowledgeBasePage() {
     }
   };
 
-  const updateJob = (job: IndexJob) => {
-    queryClient.setQueryData<IndexJob[]>(jobKey(job.documentId), (jobs = []) => [job, ...jobs.filter((item) => item.id !== job.id)]);
-  };
-
-  const updateDocument = (document: IndexedDocument) => {
-    queryClient.setQueryData<IndexedDocument[]>(documentsKey, (items = []) => items.map((item) => item.id === document.id ? document : item));
-  };
-
-  const updateDemoCourses = (documentId: string, courseIds: string[]) => {
-    const sortedIds = [...courseIds].sort();
-    const names = sortedIds.map((courseId) => courseTitles.get(courseId) ?? `Unknown course (${courseId})`);
-    setDemoDocuments((items) => items.map((document) => document.id === documentId
-      ? { ...document, courseIds: sortedIds, courseNames: names, course: names.join(", ") || "No courses" }
-      : document));
-  };
-
-  const runDocumentOperation = async (document: DisplayDocument, operation: DocumentOperation, work: () => Promise<void>) => {
-    setDocumentOperationError(null);
-    setOperations((current) => ({ ...current, [document.id]: operation }));
-    try {
-      await work();
-    } catch (error) {
-      setDocumentOperationError(operationError(operationLabels[operation], error));
-    } finally {
-      setOperations((current) => ({ ...current, [document.id]: undefined }));
-    }
-  };
-
-  const linkCourse = (document: DisplayDocument, courseId: string) => {
-    const courseName = courseTitles.get(courseId) ?? courseId;
-    if (isDemo) {
-      updateDemoCourses(document.id, [...new Set([...document.courseIds, courseId])]);
-      setImportNotice(`Demo only: ${courseName} was linked to ${document.name} in sample state.`);
-      return;
-    }
-    if (!core.client) return;
-    void runDocumentOperation(document, "linking", async () => {
-      const result = await core.client!.linkDocumentCourse(document.id, courseId);
-      updateDocument(result.document);
-      setImportNotice(result.linked
-        ? `${courseName} was linked to ${document.name}.`
-        : `${document.name} was already linked to ${courseName}; no relationship changed.`);
-    });
-  };
-
-  const unlinkCourse = (document: DisplayDocument, courseId: string) => {
-    const courseName = courseTitles.get(courseId) ?? courseId;
-    if (isDemo) {
-      updateDemoCourses(document.id, document.courseIds.filter((id) => id !== courseId));
-      setImportNotice(`Demo only: ${courseName} was unlinked from ${document.name}; the sample document was retained.`);
-      return;
-    }
-    if (!core.client) return;
-    void runDocumentOperation(document, "unlinking", async () => {
-      await core.client!.unlinkDocumentCourse(document.id, courseId);
-      queryClient.setQueryData<IndexedDocument[]>(documentsKey, (items = []) => items.map((item) => item.id === document.id
-        ? { ...item, courseIds: item.courseIds.filter((id) => id !== courseId) }
-        : item));
-      setImportNotice(`${courseName} was unlinked from ${document.name}; the document and index were retained.`);
-    });
-  };
-
-  const cancelJob = (document: DisplayDocument) => {
-    if (!core.client || !document.job) return;
-    void runDocumentOperation(document, "cancelling", async () => {
-      const job = await core.client!.cancelIndexJob(document.job!.id);
-      updateJob(job);
-      setImportNotice(cancellationNotice(document.name, job));
-    });
-  };
-
-  const retryDocument = (document: DisplayDocument) => {
-    if (!core.client) return;
-    void runDocumentOperation(document, "retrying", async () => {
-      const result = await core.client!.retryDocument(document.id);
-      updateJob(result.job);
-      await queryClient.invalidateQueries({ queryKey: documentsKey });
-      setImportNotice(`A new indexing job was queued for ${document.name}. Progress is ${result.job.progress}%.`);
-    });
-  };
-
-  const reindexEmbeddings = (document: DisplayDocument) => {
-    if (!core.client) return;
-    void runDocumentOperation(document, "reindexing", async () => {
-      const result = await core.client!.reindexDocumentEmbeddings(document.id);
-      updateDocument(result.document);
-      updateJob(result.job);
-      setImportNotice(`Embedding reindex job ${result.job.id} was queued for ${document.name}. Its existing lexical index remains available while the local provider runs.`);
-    });
-  };
-
-  const deleteDocument = (document: DisplayDocument) => {
-    if (!core.client) return;
-    const confirmed = window.confirm(`Permanently delete “${document.name}”, its stored file, chunks, and indexing history? This cannot be undone.`);
-    if (!confirmed) return;
-    setImportNotice(null);
-    void runDocumentOperation(document, "deleting", async () => {
-      try {
-        await core.client!.deleteDocument(document.id);
-      } catch (error) {
-        const reconciliation = Promise.allSettled([
-          queryClient.invalidateQueries({ queryKey: documentsKey }),
-          queryClient.invalidateQueries({ queryKey: jobsKeyPrefix }),
-        ]);
-        if (isConfirmedPartialDelete(error)) {
-          queryClient.setQueryData<typeof documentRecords>(documentsKey, (items = []) => items.filter((item) => item.id !== document.id));
-          queryClient.removeQueries({ queryKey: jobKey(document.id), exact: true });
-          await reconciliation;
-          const requestId = error.requestId ? ` Request ID: ${error.requestId}.` : "";
-          const detail = error.detail?.message ?? error.message;
-          setDocumentOperationError(`The document record and index data for ${document.name} were deleted, but local source cleanup is incomplete: ${detail}.${requestId}`);
-          return;
-        }
-        await reconciliation;
-        throw error;
-      }
-      queryClient.removeQueries({ queryKey: jobKey(document.id), exact: true });
-      queryClient.setQueryData<typeof documentRecords>(documentsKey, (items = []) => items.filter((item) => item.id !== document.id));
-      setImportNotice(`${document.name} and its local indexing data were deleted.`);
-    });
-  };
+  const {
+    operations, documentOperationError, linkCourse, unlinkCourse,
+    cancelJob, retryDocument, reindexEmbeddings, deleteDocument,
+  } = useDocumentActions({
+    client: core.client, isDemo, courseTitles, documentsKey, jobsKeyPrefix, jobKey,
+    queryClient, setDemoDocuments, setImportNotice,
+  });
 
   const retry = () => {
     if (live) void documentsQuery.refetch();
@@ -346,6 +231,16 @@ export function KnowledgeBasePage() {
       {!isDemo && live && documentsQuery.isPending && <KnowledgeState kind="loading" onRetry={retry} />}
       {!isDemo && live && documentsQuery.isError && <KnowledgeState kind="error" onRetry={retry} />}
       {showContent && <>
+        <CourseCreateForm
+          key={courseConnectionId}
+          client={live && core.demoState ? core.client : null}
+          cacheKey={courseCacheKey}
+          demo={isDemo}
+          onCreated={(course) => {
+            addCreatedCourse(course);
+            setImportCourseId(course.id);
+          }}
+        />
         {!isDemo && core.demoStateError && <div className="operation-error job-status-error" role="alert"><span>Course names and course-link controls could not be loaded. Document IDs and indexing status remain available; no relationship was changed.</span><Button onClick={() => { void core.retry(); }}>Retry courses</Button></div>}
         <Card className={`dropzone ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); void importFile(event.dataTransfer.files[0]); }}><UploadCloud size={24} /><div><strong>Drop a PDF, Markdown, or text file here</strong><span>Only the selected browser File is sent to the authenticated local service; arbitrary paths are never accepted.</span></div><Button disabled={uploading} onClick={() => fileInput.current?.click()}>Choose file</Button></Card>
         {importNotice && <div className="operation-notice" role="status">{importNotice}</div>}

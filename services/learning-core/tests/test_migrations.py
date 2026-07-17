@@ -101,7 +101,7 @@ def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
 
     applied = database.migrate()
     assert applied[:3] == [6, 7, 8]
-    assert applied[3:] == list(range(9, 21))
+    assert applied[3:] == list(range(9, 22))
     with database.connection() as connection:
         assert (
             connection.execute(
@@ -182,7 +182,7 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
 
     applied = database.migrate()
     assert applied[:2] == [7, 8]
-    assert applied[2:] == list(range(9, 21))
+    assert applied[2:] == list(range(9, 22))
     with database.connection() as connection:
         trigger = connection.execute(
             """
@@ -253,7 +253,7 @@ def test_learning_loop_migrations_preserve_existing_008_learning_state(tmp_path)
         )
         connection.commit()
 
-    assert database.migrate() == list(range(9, 21))
+    assert database.migrate() == list(range(9, 22))
     database.verify_consistency()
     with database.connection() as connection:
         mastery = connection.execute(
@@ -562,7 +562,7 @@ def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
         )
         connection.commit()
 
-    assert database.migrate() == [18, 19, 20]
+    assert database.migrate() == [18, 19, 20, 21]
     assert database.migrate() == []
     database.verify_consistency()
     with database.connection() as connection:
@@ -608,7 +608,7 @@ def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
         "undone_at": None,
         "undone_by_tool_invocation_id": None,
     }
-    assert versions == list(range(1, 21))
+    assert versions == list(range(1, 22))
     assert trigger_count == 7
 
 
@@ -717,7 +717,7 @@ def test_019_backfills_agent_course_scope_from_persisted_context(tmp_path):
         )
         connection.commit()
 
-    assert database.migrate() == [19, 20]
+    assert database.migrate() == [19, 20, 21]
     assert database.migrate() == []
     with database.connection() as connection:
         scopes = {

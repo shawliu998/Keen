@@ -96,6 +96,13 @@ source preview, authorized reference capture or visual-diff artifact. The Home /
 Agent retrieval trace, source interaction states and HyperKnow comparison remain
 Missing; no visual parity claim is made.
 
+2026-07-17 course-setup note: Knowledge Base now contains a functional local
+course-creation form with component/integration evidence, including Demo and
+service-unavailable behavior. No authorized HyperKnow reference, fixed-viewport
+capture, accessibility scan or visual-diff artifact was produced for this
+state. Its layout and error states therefore remain implemented but visually
+unverified, and no parity claim is made.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

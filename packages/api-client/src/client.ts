@@ -21,6 +21,8 @@ import {
 } from "./agentSchemas";
 import {
   answerStreamEventSchema,
+  courseCreateRequestSchema,
+  courseCreateResponseSchema,
   demoStateSchema,
   documentCourseLinkResponseSchema,
   documentEmbeddingReindexResponseSchema,
@@ -33,6 +35,8 @@ import {
   indexJobSchema,
   searchResponseSchema,
   type DemoState,
+  type CourseCreateRequest,
+  type CourseCreateResponse,
   type AnswerStreamEvent,
   type DocumentImportResponse,
   type DocumentCourseLinkResponse,
@@ -364,6 +368,20 @@ export class LearningCoreClient {
 
   demoState(options: RequestOptions = {}): Promise<DemoState> {
     return this.#request("/v1/demo-state", demoStateSchema, options);
+  }
+
+  createCourse(request: CourseCreateRequest, options: RequestOptions = {}): Promise<CourseCreateResponse> {
+    const parsed = courseCreateRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError("/v1/courses");
+    return this.#request("/v1/courses", courseCreateResponseSchema, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed.data),
+      signal: options.signal,
+    }, {
+      expectedStatuses: [200, 201],
+      validate: (status, result) => (status === 200) === result.replayed,
+    });
   }
 
   uploadDocument(file: File, courseId?: string, options: RequestOptions = {}): Promise<DocumentImportResponse> {

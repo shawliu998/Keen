@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .courses import normalize_course_title_display
 
 
 class ApiModel(BaseModel):
@@ -23,6 +25,35 @@ class Course(ApiModel):
     created_at: datetime
     concept_count: int = 0
     average_mastery: float | None = None
+
+
+class CourseCreate(ApiModel):
+    """The bounded, idempotent local course-creation command."""
+
+    title: str = Field(min_length=1, max_length=240, strict=True)
+    description: str = Field(default="", max_length=8_000, strict=True)
+    idempotency_key: str = Field(
+        alias="idempotencyKey",
+        min_length=16,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        strict=True,
+    )
+
+    @field_validator("title")
+    @classmethod
+    def title_must_contain_non_whitespace(cls, value: str) -> str:
+        normalized = normalize_course_title_display(value)
+        if not normalized:
+            raise ValueError("title must contain non-whitespace characters")
+        if len(normalized) > 240:
+            raise ValueError("normalized title must contain at most 240 characters")
+        return normalized
+
+
+class CourseCreateResponse(ApiModel):
+    course: Course
+    replayed: bool
 
 
 class StudyTask(ApiModel):

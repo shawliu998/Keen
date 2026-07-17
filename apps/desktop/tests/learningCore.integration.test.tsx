@@ -31,7 +31,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function renderApp(route: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  return render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[route]}><App /></MemoryRouter></QueryClientProvider>);
+  const view = render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[route]}><App /></MemoryRouter></QueryClientProvider>);
+  return { ...view, queryClient };
 }
 
 beforeEach(() => {
@@ -356,6 +357,87 @@ describe("learning-core runtime states", () => {
     expect(screen.getByText(/selected course was linked/i)).toBeInTheDocument();
     await waitFor(() => expect(documentLoads).toBeGreaterThanOrEqual(2));
   });
+
+  it("creates a local course and selects it as the next document-import course", async () => {
+    const user = userEvent.setup();
+    tauriMocks.isTauri.mockReturnValue(true);
+    tauriMocks.invoke.mockResolvedValue(connection);
+    const createdCourse = { id: "course-created", title: "Calculus", description: "Limits", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/health")) return jsonResponse(health);
+      if (url.endsWith("/v1/demo-state")) return jsonResponse(demoState);
+      if (url.endsWith("/v1/documents")) return jsonResponse({ documents: [documentRecord] });
+      if (url.includes("/v1/index-jobs?documentId=")) return jsonResponse({ jobs: [completedIndexJob] });
+      if (url.endsWith("/v1/courses") && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual(expect.objectContaining({ title: "Calculus", description: "Limits", idempotencyKey: expect.any(String) }));
+        return jsonResponse({ course: createdCourse, replayed: false }, 201);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { queryClient } = renderApp("/knowledge");
+
+    await screen.findByText("Live Notes.txt");
+    await user.type(screen.getByLabelText("Course title"), "Calculus");
+    await user.type(screen.getByLabelText("Course description"), "Limits");
+    await user.click(screen.getByRole("button", { name: "Create course" }));
+    expect(await screen.findByText(/Created “Calculus” and selected it for the next import/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Course for imported document")).toHaveValue("course-created");
+    expect(screen.getAllByRole("option", { name: "Calculus" }).length).toBeGreaterThan(0);
+    const courseState = queryClient.getQueryCache().findAll({ queryKey: ["learning-core", "demo-state"] })
+      .map((query) => query.state.data as typeof demoState | undefined)
+      .find((state) => state?.courses.some((course) => course.id === "course-created"));
+    expect(courseState?.courses).toContainEqual(createdCourse);
+  });
+
+  it("aborts a course create when credentials rotate and ignores a late response from the old connection", async () => {
+    const user = userEvent.setup();
+    tauriMocks.isTauri.mockReturnValue(true);
+    const rotatedConnection = { ...connection, token: "c".repeat(64) };
+    const rotatedState = {
+      ...demoState,
+      courses: [{ ...demoState.courses[0], id: "course-rotated", title: "Rotated Course" }],
+    };
+    const createdCourse = { id: "course-created", title: "Calculus", description: "Limits", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null };
+    let activeConnection = connection;
+    let resolveCreate!: (response: Response) => void;
+    let createSignal: AbortSignal | undefined;
+    tauriMocks.invoke.mockImplementation(async () => activeConnection);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/health")) return jsonResponse(health);
+      if (url.endsWith("/v1/demo-state")) {
+        const authorization = new Headers(init?.headers).get("Authorization");
+        return jsonResponse(authorization === `Bearer ${rotatedConnection.token}` ? rotatedState : demoState);
+      }
+      if (url.endsWith("/v1/documents")) return jsonResponse({ documents: [documentRecord] });
+      if (url.includes("/v1/index-jobs?documentId=")) return jsonResponse({ jobs: [completedIndexJob] });
+      if (url.endsWith("/v1/courses") && init?.method === "POST") {
+        createSignal = init.signal as AbortSignal | undefined;
+        return new Promise<Response>((resolve) => { resolveCreate = resolve; });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const { queryClient } = renderApp("/knowledge");
+
+    await screen.findByText("Live Notes.txt");
+    await user.type(screen.getByLabelText("Course title"), "Calculus");
+    await user.click(screen.getByRole("button", { name: "Create course" }));
+    await waitFor(() => expect(createSignal).toBeDefined());
+
+    activeConnection = rotatedConnection;
+    await waitFor(() => expect(createSignal?.aborted).toBe(true), { timeout: 4_500 });
+    await waitFor(() => expect(screen.getAllByRole("option", { name: "Rotated Course" }).length).toBeGreaterThan(0), { timeout: 4_500 });
+
+    resolveCreate(jsonResponse({ course: createdCourse, replayed: false }, 201));
+    await waitFor(() => expect(screen.queryByRole("option", { name: "Calculus" })).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Course for imported document")).toHaveValue("");
+    const states = queryClient.getQueryCache().findAll({ queryKey: ["learning-core", "demo-state"] })
+      .map((query) => query.state.data as typeof demoState | undefined);
+    expect(states.some((state) => state?.courses.some((course) => course.id === "course-rotated"))).toBe(true);
+    expect(states.some((state) => state?.courses.some((course) => course.id === createdCourse.id))).toBe(false);
+  }, 10_000);
 
   it.each([
     [

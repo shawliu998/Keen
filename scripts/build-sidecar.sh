@@ -19,6 +19,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 readonly SERVICE_ROOT="${REPOSITORY_ROOT}/services/learning-core"
 readonly LOCK_FILE="${SERVICE_ROOT}/pylock.toml"
+readonly MIGRATION_VALIDATOR="${SCRIPT_DIR}/verify-sidecar-migrations.py"
 readonly TAURI_ROOT="${REPOSITORY_ROOT}/apps/desktop/src-tauri"
 readonly ENTRYPOINT="${TAURI_ROOT}/sidecar/entrypoint.py"
 readonly BUILD_ROOT="${TAURI_ROOT}/target/sidecar-build"
@@ -45,8 +46,13 @@ fail() {
 [[ -d "${SERVICE_ROOT}/app" ]] || fail "learning-core source is missing: ${SERVICE_ROOT}/app"
 [[ -d "${SERVICE_ROOT}/migrations" ]] || fail "learning-core migrations are missing"
 [[ -d "${SERVICE_ROOT}/seeds" ]] || fail "learning-core seeds are missing"
-[[ -f "${SERVICE_ROOT}/migrations/008_pdf_geometry.sql" ]] || fail "migration 008_pdf_geometry.sql is missing"
+[[ -f "${MIGRATION_VALIDATOR}" ]] || fail "sidecar migration validator is missing: ${MIGRATION_VALIDATOR}"
 [[ -f "${LOCK_FILE}" ]] || fail "learning-core runtime lock is missing: ${LOCK_FILE}"
+
+if ! "${PYTHON_BIN}" "${MIGRATION_VALIDATOR}" "${SERVICE_ROOT}/migrations" \
+  --minimum-version 21; then
+  fail "learning-core migrations must be continuous from 001 through the current version (at least 021)"
+fi
 
 python_version="$(${PYTHON_BIN} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 if [[ "${python_version}" != "3.11" ]]; then

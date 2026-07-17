@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -54,7 +56,11 @@ from .index_jobs import ActiveIndexJobError, IndexJobRepository
 from .index_worker import DocumentIndexWorker
 from .instance_lock import hold_database_instance_lock
 from .knowledge_state import enrich_document_knowledge_state
-from .repository import LearningRepository
+from .repository import (
+    CourseIdempotencyConflictError,
+    CourseTitleConflictError,
+    LearningRepository,
+)
 from .request_guard import RequestGuardMiddleware
 from .routers.agent_mutations import router as agent_mutations_router
 from .routers.agent_runs import router as agent_runs_router
@@ -67,6 +73,8 @@ from .schemas import (
     AnswerRequest,
     Citation,
     Course,
+    CourseCreate,
+    CourseCreateResponse,
     DemoState,
     DocumentImportResponse,
     DocumentEmbeddingReindexResponse,
@@ -102,6 +110,52 @@ logger = logging.getLogger("keen.learning_core")
 
 StartupPhase = Literal["migrating", "recovering", "starting_server"]
 StartupPhaseReporter = Callable[[StartupPhase], None]
+
+
+def _is_retryable_sqlite_write_error(error: sqlite3.Error) -> bool:
+    """Return whether SQLite rejected a write because another connection owns it."""
+
+    error_code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(error_code, int) and error_code & 0xFF in {
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+    }:
+        return True
+    return (
+        "database is locked" in str(error).casefold()
+        or "database is busy" in str(error).casefold()
+    )
+
+
+def _course_create_sqlite_error(error: sqlite3.Error) -> HTTPException:
+    retryable = _is_retryable_sqlite_write_error(error)
+    return HTTPException(
+        status_code=503 if retryable else 500,
+        detail={
+            "code": (
+                "course_create_temporarily_unavailable"
+                if retryable
+                else "course_create_failed"
+            ),
+            "message": (
+                "Keen could not access the local learning database to create the course. "
+                "The result may have been saved."
+                if retryable
+                else "Keen could not safely determine whether the course creation was saved."
+            ),
+            "retryable": retryable,
+            "recovery": (
+                "Refresh the course list, then retry with the same creation key."
+                if retryable
+                else (
+                    "Refresh the course list. Confirm the local learning service and "
+                    "storage have recovered before retrying with the same creation key."
+                )
+            ),
+            "automaticRecovery": False,
+            "outcomeMayBeDurable": True,
+        },
+    )
 
 
 def _repository(request: Request) -> Iterator[LearningRepository]:
@@ -299,6 +353,50 @@ def create_app(
     @app.get("/v1/courses", response_model=list[Course])
     def list_courses(repository: LearningRepository = Depends(_repository)):
         return repository.list_courses()
+
+    @app.post("/v1/courses", response_model=CourseCreateResponse, status_code=201)
+    def create_course(
+        course: CourseCreate,
+        response: Response,
+        repository: LearningRepository = Depends(_repository),
+    ) -> dict:
+        try:
+            created, replayed = repository.create_course(
+                course_id=f"course-{uuid.uuid4().hex}",
+                title=course.title,
+                description=course.description,
+                idempotency_key=course.idempotency_key,
+                created_at=datetime.now(UTC).isoformat(),
+            )
+        except CourseTitleConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "course_title_conflict",
+                    "message": "A course with this title already exists; no new course was created.",
+                    "retryable": False,
+                    "recovery": "Choose a different course title and retry.",
+                    "automaticRecovery": False,
+                },
+            ) from error
+        except CourseIdempotencyConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "idempotency_key_conflict",
+                    "message": "This creation key was already used for a different course; no new course was created.",
+                    "retryable": False,
+                    "recovery": "Use a new creation key for a different course.",
+                    "automaticRecovery": False,
+                },
+            ) from error
+        except sqlite3.Error as error:
+            # A commit can fail after SQLite has durably applied it. Do not expose
+            # provider details or claim that a new course was not written.
+            raise _course_create_sqlite_error(error) from None
+        if replayed:
+            response.status_code = 200
+        return {"course": created, "replayed": replayed}
 
     @app.get("/v1/courses/{course_id}", response_model=Course)
     def get_course(

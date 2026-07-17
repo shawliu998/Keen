@@ -80,13 +80,13 @@ Important compatibility fact: `mastery_events` and `study_tasks` already contain
 
 The current `app/main.py` exposes:
 
-- health/course/state: `GET /health`, `GET /v1/courses`, `GET /v1/courses/{id}`, `GET /v1/demo-state`;
+- health/course/state: `GET /health`, `GET/POST /v1/courses`, `GET /v1/courses/{id}`, `GET /v1/demo-state`;
 - tasks/mastery: `GET/POST /v1/tasks`, `PATCH /v1/tasks/{id}`, `GET /v1/mastery`, `POST /v1/mastery/attempts`;
 - documents/jobs: import/list/content, course link/unlink, job list/get/cancel, retry/reindex/delete;
 - retrieval: `POST /v1/search`, deterministic `POST /v1/query`, and generated `POST /v1/answer/stream` SSE.
 - Agent: authenticated create/get/cancel/events, pending Level 2 action listing, confirm/reject, and Study Task Undo/Redo resources under `/v1/agent/runs`.
 
-All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation and mutation actions are capped by the shared 64 KiB JSON request guard. There is no `POST /v1/courses`, so the real E2E cannot yet perform its required create-course step. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet. The Agent API has a strict frontend client, allowlisted Study Task Undo/Redo resources and a visible Home runtime/activity surface. A configured loopback local-chat model now drives a real text-only Agent provider; installations without that configuration still truthfully return `provider_missing`.
+All routes inherit existing sidecar Bearer authentication and request guards. Agent run creation, mutation actions and course creation are capped by the shared 64 KiB JSON request guard. Authenticated, idempotent course creation is implemented and connected to the live Knowledge Base; concept creation and the real source-to-plan flow remain absent. No conversation, study-session, assessment, misconception, review or explainable Feed API exists yet. The Agent API has a strict frontend client, allowlisted Study Task Undo/Redo resources and a visible Home runtime/activity surface. A configured loopback local-chat model now drives a real text-only Agent provider; installations without that configuration still truthfully return `provider_missing`.
 
 ## Reusable modules and required boundaries
 
@@ -120,7 +120,7 @@ The model may interpret goals, choose registered tools, draft teaching text/ques
 
 ## New domain model and migration order
 
-Status for migrations `009`–`020`: **verified** for forward migration,
+Status for migrations `009`–`021`: **verified** for forward migration,
 constraints, repositories, and legacy-row preservation. This is persistence
 evidence only; it does not claim that the HTTP learning loop or UI exists.
 Responsibilities remain separate even if implementation discovers that a
@@ -140,6 +140,7 @@ compatibility table or follow-up index is necessary.
 | `018_agent_undo_tracking.sql` | additive Undo lifecycle fields and tamper-resistant tracking for `state_mutations` | Preserve existing audit rows; require one dedicated succeeded Level 2 inverse in the same run; reject pretracked inserts, repeated Undo, forged relationships and post-Undo mutation/invocation changes |
 | `019_agent_course_scope.sql` | immutable `agent_runs.course_scope_id` audit scope | Backfill from persisted session/conversation context, reject mismatches and retain scope after context detachment |
 | `020_level2_approval_actions.sql` | private canonical Level 2 proposal arguments linked to proposal/execution audit | Preserve public redaction; require a denied proposal invocation, immutable arguments, one host execution invocation and idempotent resolution |
+| `021_course_create_idempotency.sql` | normalized course-title identity and course-create idempotency ledger | Preserve legacy duplicate titles unchanged; serialize new identities and replay identical requests without duplicate courses |
 
 Every JSON text column must pass Pydantic/Zod validation at the boundary and `json_valid` where SQLite supports the invariant. Use foreign keys, status checks, indexes for recovery and due queries, transactionally consistent writes, and explicit `created_at`/`updated_at`. Migration tests must cover empty database, `001` legacy database, current `008` database with user rows, repeated startup, constraint failure and interrupted upgrade. No destructive reset is an accepted recovery action.
 
@@ -306,12 +307,13 @@ Actions are Start, Complete, Snooze, Reschedule, Too easy, Too hard and Not rele
 
 ## API and streaming contract
 
-Status: **in progress**. The Agent create/get/cancel/events resource is
-implemented; the other learning-loop resources below remain `not started`.
+Status: **in progress**. Course creation and the Agent
+create/get/cancel/events/approval resources are implemented; the other
+learning-loop resources below remain `not started`.
 
 Add separate routers/services/repositories for conversations, Agent, study sessions, assessments, mastery, reviews and learning Feed. Minimum resource APIs:
 
-- courses: add authenticated `POST /v1/courses` with a typed request/response and repository uniqueness/error handling so E2E creates a real course instead of relying on demo seed;
+- courses: authenticated `POST /v1/courses` is implemented with typed request/response, normalized identity, legacy-row preservation and idempotent replay; concept creation remains open;
 - conversations: create/list/detail and post message;
 - Agent: create/get/cancel run and durable run events;
 - sessions: create/list/detail/start/pause/resume/advance/complete;
@@ -575,6 +577,18 @@ The visual run remained `missing_reference`; this is functional evidence only,
 not a HyperKnow parity claim. Broader approvals, hybrid retrieval, packaged GUI
 lifecycle E2E and the remaining learning-loop gates remain open.
 
+The first real course-setup slice adds authenticated, idempotent
+`POST /v1/courses` and a live Knowledge Base form. New titles use a normalized
+identity without rewriting legacy duplicate rows; same-key retries replay and
+conflicts fail closed. The desktop keeps Browser Demo request-free, isolates
+the authoritative course cache by sidecar generation and selects a confirmed
+course for import. Local validation on the implementation snapshot passed the
+full Python and desktop suites plus their lint, format, typecheck and production
+build gates. The checked-in CI definition has not run remotely, and migration
+021 has not yet been proven inside a newly rebuilt `.app`/`.dmg`; the bundled
+smoke now contains that assertion for the next actual package run. No visual or
+release milestone is claimed.
+
 ### Gate 4 — durable Conversation and Deep Learn
 
 Status: **not started**.
@@ -619,7 +633,7 @@ Status: **in progress**. The pinned FSRS dependency passed isolated lock,
 license, import and PyInstaller one-file checks; the latest adapter/migration
 still requires the final Gate 7 `.app`/`.dmg` rebuild and mounted smoke.
 
-Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`020` must be bundled and verified from an upgraded user database. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
+Python packages added for FSRS or learning services must enter the CPython 3.11/macOS arm64 PEP 751 lock with hashes, pass isolated PyInstaller import/native-extension checks and be present in mounted-DMG tests. Migrations `009`–`021` must be bundled and verified from an upgraded user database. Source-tree preflight verifies a continuous sequence through 021; the frozen smoke now checks that applied sequence and real course-create replay, but it has not run against a newly rebuilt package in this slice. New recovery/cancel behavior must not weaken the existing random-port/token/process-group lifecycle. Any release claim still requires actual Developer ID hardened-runtime signing and notarization; existing ad-hoc arm64 evidence is local verification only.
 
 ## Risks and mitigations
 

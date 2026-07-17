@@ -2,6 +2,7 @@ import {
   createLearningCoreClient,
   InvalidLearningCoreUrlError,
   LearningCoreResponseError,
+  LearningCoreRequestError,
   LearningCoreSchemaError,
   LearningCoreDocumentContentError,
   answerCitationSchema,
@@ -131,6 +132,44 @@ describe("LearningCoreClient security boundary", () => {
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(new Headers(init.headers).get("Authorization")).toBe(`Bearer ${token}`);
     expect(init.signal).toBe(controller.signal);
+  });
+
+  it("creates a course with a strict camelCase contract and distinguishes replay status", async () => {
+    const course = { id: "course-created", title: "Calculus", description: "Limits", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null };
+    const fetchMock = vi.fn(async () => jsonResponse({ course, replayed: false }, 201));
+    const controller = new AbortController();
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    await expect(client.createCourse({ title: "Calculus", description: "Limits", idempotencyKey: "course-0123456789abcdef" }, { signal: controller.signal })).resolves.toEqual({ course, replayed: false });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:8080/v1/courses");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ title: "Calculus", description: "Limits", idempotencyKey: "course-0123456789abcdef" });
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("defaults an omitted course description before sending the validated request", async () => {
+    const course = { id: "course-created", title: "Calculus", description: "", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null };
+    const fetchMock = vi.fn(async () => jsonResponse({ course, replayed: false }, 201));
+    const client = createLearningCoreClient("http://127.0.0.1:8080", token, fetchMock as unknown as typeof fetch);
+
+    await client.createCourse({ title: "Calculus", idempotencyKey: "course-0123456789abcdef" });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ title: "Calculus", description: "", idempotencyKey: "course-0123456789abcdef" });
+  });
+
+  it("rejects malformed course requests and mismatched creation status semantics", async () => {
+    const course = { id: "course-created", title: "Calculus", description: "Limits", created_at: "2026-07-17T10:00:00+00:00", concept_count: 0, average_mastery: null };
+    const invalidFetch = vi.fn();
+    const invalidClient = createLearningCoreClient("http://127.0.0.1:8080", token, invalidFetch as unknown as typeof fetch);
+    await expect(Promise.resolve().then(() => invalidClient.createCourse({ title: "Calculus", description: "", idempotencyKey: "short" }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => invalidClient.createCourse({ title: "Calculus", description: "", idempotencyKey: "course key with spaces" }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    await expect(Promise.resolve().then(() => invalidClient.createCourse({ title: "Calculus", description: "", idempotencyKey: ".course-0123456789abcdef" }))).rejects.toBeInstanceOf(LearningCoreRequestError);
+    expect(invalidFetch).not.toHaveBeenCalled();
+
+    const semanticClient = createLearningCoreClient("http://127.0.0.1:8080", token, vi.fn(async () => jsonResponse({ course, replayed: false }, 200)) as unknown as typeof fetch);
+    await expect(semanticClient.createCourse({ title: "Calculus", description: "Limits", idempotencyKey: "course-0123456789abcdef" })).rejects.toBeInstanceOf(LearningCoreSchemaError);
   });
 
   it("uploads a browser File as multipart without overriding its Content-Type", async () => {

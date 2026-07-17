@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feature/**"
+      - "codex/**"
+
+permissions:
+  contents: read
+
+# Use only official GitHub Actions, pinned to reviewed immutable release SHAs.
+
+jobs:
+  desktop:
+    name: Desktop frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  learning-core:
+    name: Learning core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/learning-core/pyproject.toml
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install --upgrade pip
+      - run: .venv/bin/python -m pip install -e 'services/learning-core[dev]' 'ruff==0.14.14'
+      - run: .venv/bin/python -m ruff check services/learning-core/app services/learning-core/tests
+      - run: .venv/bin/python -m ruff format --check services/learning-core/app services/learning-core/tests
+      - run: PYTHONPATH=services/learning-core .venv/bin/python -m pytest services/learning-core/tests
+      - run: PYTHON_BIN=.venv/bin/python bash scripts/test-sidecar-migration-preflight.sh
+
+  rust:
+    name: Tauri Rust
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+  macos-packaging-manual-only:
+    name: macOS packaging (manual only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+          architecture: arm64
+          cache: pip
+          cache-dependency-path: services/learning-core/pyproject.toml
+      - run: rustup component add rustfmt clippy
+      - run: npm ci
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install -e 'services/learning-core[dev]' 'pyinstaller==6.21.0' 'pyinstaller-hooks-contrib==2026.6'
+      - run: npm run package:macos
+      - run: echo 'This workflow creates an ad-hoc local verification bundle only; it is not a release, Developer ID signature, or notarization attestation.'
