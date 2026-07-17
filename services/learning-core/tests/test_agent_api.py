@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import sqlite3
 import threading
 import time
 from collections.abc import AsyncIterator, Sequence
@@ -1021,7 +1020,7 @@ def test_durable_idempotent_replay_needs_no_provider_and_rejects_payload_conflic
     asyncio.run(scenario())
 
 
-def test_repository_error_is_not_masked_by_provider_close_error(tmp_path):
+def test_invalid_context_is_rejected_before_provider_initialization(tmp_path):
     from app.services.agent_runtime import AgentRuntimeManager
 
     database = Database(tmp_path / "repo-close-error.sqlite3")
@@ -1030,7 +1029,9 @@ def test_repository_error_is_not_masked_by_provider_close_error(tmp_path):
 
     async def scenario() -> None:
         manager = AgentRuntimeManager(database, provider_factory=lambda: provider)
-        with pytest.raises(sqlite3.IntegrityError) as captured:
+        with pytest.raises(
+            ValueError, match="agent run conversation context does not exist"
+        ) as captured:
             await manager.create_run(
                 kind="conversation",
                 user_intent="Invalid conversation",
@@ -1042,7 +1043,7 @@ def test_repository_error_is_not_masked_by_provider_close_error(tmp_path):
         assert "close-secret" not in str(captured.value)
 
     asyncio.run(scenario())
-    assert provider.closed is True
+    assert provider.closed is False
     with database.connection() as connection:
         assert connection.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0
 

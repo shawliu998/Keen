@@ -77,6 +77,11 @@ allowlist and strict local-chat stop-reason validation are backend-only changes;
 they add no rendered state or new visual evidence. The Home / Agent reference,
 failure-state captures and parity comparison therefore remain Missing.
 
+2026-07-17 Agent course-scope note: migration 019 and trusted run-scope
+resolution are persistence-only changes. They do not add a rendered tool state,
+reference capture or visual-diff result; the Home / Agent visual row and scoped
+tool activity states therefore remain Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

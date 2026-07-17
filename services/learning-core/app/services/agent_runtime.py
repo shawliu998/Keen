@@ -15,6 +15,7 @@ from ..agent.provider import (
     close_provider_safely,
 )
 from ..agent.registry import ToolRegistry
+from ..agent.scope import resolve_course_scope
 from ..agent.sqlite_audit import SQLiteAuditSink
 from ..agent.tools.product import register_initial_product_tools
 from ..database import Database
@@ -111,10 +112,16 @@ class AgentRuntimeManager:
                 existing = AgentRepository(connection).find_run_by_idempotency(
                     kind=kind, idempotency_key=idempotency_key
                 )
+                course_scope_id = resolve_course_scope(
+                    connection,
+                    conversation_id=conversation_id,
+                    study_session_id=study_session_id,
+                )
             if existing is not None:
                 expected = (
                     conversation_id,
                     study_session_id,
+                    course_scope_id,
                     kind,
                     user_intent,
                     mode,
@@ -125,6 +132,7 @@ class AgentRuntimeManager:
                     for key in (
                         "conversation_id",
                         "study_session_id",
+                        "course_scope_id",
                         "kind",
                         "user_intent",
                         "mode",

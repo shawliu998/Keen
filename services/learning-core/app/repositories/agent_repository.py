@@ -6,6 +6,8 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
 
+from app.agent.scope import resolve_course_scope
+
 from . import JsonValue, dump_json, load_json, validate_json, write_scope
 
 
@@ -186,35 +188,21 @@ class AgentRepository:
             raise ValueError("invalid agent run mode")
         now = _now()
         with write_scope(self.connection, commit=commit):
-            if conversation_id is not None and study_session_id is not None:
-                context = self.connection.execute(
-                    """
-                    SELECT s.conversation_id AS session_conversation_id,
-                           s.course_id AS session_course_id,
-                           c.course_id AS conversation_course_id
-                    FROM study_sessions s JOIN conversations c ON c.id = ?
-                    WHERE s.id = ?
-                    """,
-                    (conversation_id, study_session_id),
-                ).fetchone()
-                if (
-                    context is None
-                    or context["session_conversation_id"] != conversation_id
-                    or context["conversation_course_id"]
-                    not in {None, context["session_course_id"]}
-                ):
-                    raise ValueError(
-                        "agent run conversation and study session do not match"
-                    )
+            serialized_input = _object_json(input_data, label="run input")
+            course_scope_id = resolve_course_scope(
+                self.connection,
+                conversation_id=conversation_id,
+                study_session_id=study_session_id,
+            )
             existing = self.connection.execute(
-                "SELECT id, conversation_id, study_session_id, kind, user_intent, mode, provider, model, prompt_version, input_json FROM agent_runs WHERE kind = ? AND idempotency_key = ?",
+                "SELECT id, conversation_id, study_session_id, course_scope_id, kind, user_intent, mode, provider, model, prompt_version, input_json FROM agent_runs WHERE kind = ? AND idempotency_key = ?",
                 (kind, idempotency_key),
             ).fetchone()
-            serialized_input = _object_json(input_data, label="run input")
             if existing is not None:
                 expected = (
                     conversation_id,
                     study_session_id,
+                    course_scope_id,
                     kind,
                     user_intent,
                     mode,
@@ -228,6 +216,7 @@ class AgentRepository:
                     for key in (
                         "conversation_id",
                         "study_session_id",
+                        "course_scope_id",
                         "kind",
                         "user_intent",
                         "mode",
@@ -248,16 +237,17 @@ class AgentRepository:
             self.connection.execute(
                 """
                 INSERT INTO agent_runs
-                    (id, conversation_id, study_session_id, kind, user_intent,
-                     mode, status, provider, model, prompt_version, input_json,
-                     error_code, error_detail, idempotency_key, created_at,
-                     updated_at, started_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL)
+                    (id, conversation_id, study_session_id, course_scope_id, kind,
+                     user_intent, mode, status, provider, model, prompt_version,
+                     input_json, error_code, error_detail, idempotency_key,
+                     created_at, updated_at, started_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     run_id,
                     conversation_id,
                     study_session_id,
+                    course_scope_id,
                     kind,
                     user_intent,
                     mode,
@@ -278,9 +268,9 @@ class AgentRepository:
     def get_run(self, run_id: str) -> dict | None:
         row = self.connection.execute(
             """
-            SELECT id, conversation_id, study_session_id, kind, user_intent,
-                   mode, status, provider, model, prompt_version, input_json,
-                   error_code, error_detail, idempotency_key,
+            SELECT id, conversation_id, study_session_id, course_scope_id, kind,
+                   user_intent, mode, status, provider, model, prompt_version,
+                   input_json, error_code, error_detail, idempotency_key,
                    created_at, updated_at, started_at, finished_at
             FROM agent_runs WHERE id = ?
             """,

@@ -410,7 +410,7 @@ def test_017_upgrades_default_015_fsrs_state_without_data_loss(tmp_path):
             )
         connection.commit()
 
-    assert database.migrate() == [17, 18]
+    assert database.migrate() == [17, 18, 19]
     assert database.migrate() == []
     database.verify_consistency()
     with database.connection() as connection:

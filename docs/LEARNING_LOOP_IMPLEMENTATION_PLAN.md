@@ -524,6 +524,19 @@ passed all 122 files. The next production tool slice must make provider catalog,
 orchestrator allowlist and read-only executor registry identical, inject trusted
 course/time scope, and keep Level 2/3 absent.
 
+Migration 019 now persists a run's trusted course scope as immutable audit
+evidence. The repository resolves study-session scope first and conversation
+scope second, rejects missing/mismatched contexts, ignores input/provider scope
+claims, and includes the resolved value in idempotency checks. Forward migration
+tests cover historical backfill plus conversation-only, session-only and combined
+context deletion: existing `ON DELETE SET NULL` detaches the live context while
+the run retains its course scope, and course deletion remains restricted. An
+independent acceptance pass found the initial trigger regression, verified the
+fix, and reported no remaining P0/P1. The full Python suite passed 628/628 with
+one existing Starlette warning; Ruff lint/format passed all 123 files. This is
+scope persistence only: LocalChat is still text-only, runtime production tools
+remain denied, and trusted host argument injection/read-only execution are open.
+
 ### Gate 4 — durable Conversation and Deep Learn
 
 Status: **not started**.

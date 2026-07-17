@@ -259,6 +259,114 @@ def test_agent_run_rejects_mismatched_conversation_and_session_context(repositor
         )
 
 
+def test_agent_run_persists_scope_from_trusted_context_only(repository):
+    repo, connection = repository
+    conversations = ConversationRepository(connection)
+    studies = StudyRepository(connection)
+    conversations.create_conversation(
+        conversation_id="trusted-conversation",
+        course_id="course-calculus",
+        title="Calculus",
+        mode="study",
+    )
+    studies.create_session(
+        session_id="trusted-session",
+        course_id="course-calculus",
+        conversation_id="trusted-conversation",
+        title="Calculus",
+        mode="study",
+        goal="Learn limits",
+        estimated_minutes=30,
+    )
+
+    run = repo.create_run(
+        run_id="trusted-scope",
+        conversation_id="trusted-conversation",
+        study_session_id="trusted-session",
+        kind="deep_learn",
+        user_intent="Learn",
+        mode="study",
+        provider="course-physics",
+        model="fixture",
+        prompt_version="v1",
+        input_data={"course_scope_id": "course-physics", "courseId": "course-physics"},
+        idempotency_key="trusted-scope",
+    )
+
+    assert run["course_scope_id"] == "course-calculus"
+    assert repo.get_run(run["id"])["course_scope_id"] == "course-calculus"
+
+
+@pytest.mark.parametrize(
+    ("conversation_id", "study_session_id", "message"),
+    [
+        ("missing-conversation", None, "conversation context does not exist"),
+        (None, "missing-session", "study session context does not exist"),
+    ],
+)
+def test_agent_run_rejects_nonexistent_context_with_stable_value_error(
+    repository, conversation_id, study_session_id, message
+):
+    repo, _ = repository
+    with pytest.raises(ValueError, match=message):
+        repo.create_run(
+            run_id="missing-context",
+            conversation_id=conversation_id,
+            study_session_id=study_session_id,
+            kind="conversation",
+            user_intent="Learn",
+            mode="study",
+            provider="local",
+            model="fixture",
+            prompt_version="v1",
+            input_data={},
+            idempotency_key="missing-context",
+        )
+
+
+def test_agent_run_idempotency_includes_resolved_course_scope(repository):
+    repo, connection = repository
+    conversations = ConversationRepository(connection)
+    conversations.create_conversation(
+        conversation_id="scope-replay",
+        course_id="course-calculus",
+        title="Calculus",
+        mode="study",
+    )
+    original = repo.create_run(
+        run_id="scope-replay-run",
+        conversation_id="scope-replay",
+        kind="conversation",
+        user_intent="Learn",
+        mode="study",
+        provider="local",
+        model="fixture",
+        prompt_version="v1",
+        input_data={},
+        idempotency_key="scope-replay-key",
+    )
+    connection.execute(
+        "UPDATE conversations SET course_id = 'course-physics' WHERE id = ?",
+        ("scope-replay",),
+    )
+    connection.commit()
+
+    with pytest.raises(ValueError, match="different run payload"):
+        repo.create_run(
+            run_id="ignored",
+            conversation_id="scope-replay",
+            kind="conversation",
+            user_intent="Learn",
+            mode="study",
+            provider="local",
+            model="fixture",
+            prompt_version="v1",
+            input_data={},
+            idempotency_key="scope-replay-key",
+        )
+    assert repo.get_run(original["id"])["course_scope_id"] == "course-calculus"
+
+
 def test_agent_invalid_transition_and_unvalidated_json_are_rejected(repository):
     repo, _ = repository
     _create_run(repo)

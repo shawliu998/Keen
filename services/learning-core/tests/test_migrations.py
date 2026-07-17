@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import stat
 from pathlib import Path
 
@@ -100,7 +101,7 @@ def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
 
     applied = database.migrate()
     assert applied[:3] == [6, 7, 8]
-    assert applied[3:] == list(range(9, 19))
+    assert applied[3:] == list(range(9, 20))
     with database.connection() as connection:
         assert (
             connection.execute(
@@ -181,7 +182,7 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
 
     applied = database.migrate()
     assert applied[:2] == [7, 8]
-    assert applied[2:] == list(range(9, 19))
+    assert applied[2:] == list(range(9, 20))
     with database.connection() as connection:
         trigger = connection.execute(
             """
@@ -252,7 +253,7 @@ def test_learning_loop_migrations_preserve_existing_008_learning_state(tmp_path)
         )
         connection.commit()
 
-    assert database.migrate() == list(range(9, 19))
+    assert database.migrate() == list(range(9, 20))
     database.verify_consistency()
     with database.connection() as connection:
         mastery = connection.execute(
@@ -561,7 +562,7 @@ def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
         )
         connection.commit()
 
-    assert database.migrate() == [18]
+    assert database.migrate() == [18, 19]
     assert database.migrate() == []
     database.verify_consistency()
     with database.connection() as connection:
@@ -607,5 +608,164 @@ def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
         "undone_at": None,
         "undone_by_tool_invocation_id": None,
     }
-    assert versions == list(range(1, 19))
+    assert versions == list(range(1, 20))
     assert trigger_count == 7
+
+
+def test_019_backfills_agent_course_scope_from_persisted_context(tmp_path):
+    database = Database(tmp_path / "agent-scope-019-forward.sqlite3")
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for version in range(1, 19):
+            path = next(migrations.glob(f"{version:03d}_*.sql"))
+            connection.executescript(path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO schema_migrations(version) VALUES (?)", (version,)
+            )
+        connection.executemany(
+            """
+            INSERT INTO courses (id, title, description, created_at)
+            VALUES (?, ?, '', '2026-07-17T00:00:00+00:00')
+            """,
+            [("scope-course-a", "Course A"), ("scope-course-b", "Course B")],
+        )
+        connection.executemany(
+            """
+            INSERT INTO conversations (
+                id, course_id, title, mode, status, created_at, updated_at
+            ) VALUES (?, ?, ?, 'study', 'active',
+                      '2026-07-17T00:00:00+00:00',
+                      '2026-07-17T00:00:00+00:00')
+            """,
+            [
+                ("scope-conversation-a", "scope-course-a", "Course A"),
+                ("scope-conversation-b", "scope-course-b", "Course B"),
+                ("scope-conversation-none", None, "No course"),
+            ],
+        )
+        connection.execute(
+            """
+            INSERT INTO study_sessions (
+                id, course_id, conversation_id, title, mode, goal, status,
+                estimated_minutes, created_at, updated_at
+            ) VALUES (
+                'scope-session-a', 'scope-course-a', 'scope-conversation-a',
+                'Course A', 'study', 'Learn A', 'draft', 30,
+                '2026-07-17T00:00:00+00:00',
+                '2026-07-17T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO study_sessions (
+                id, course_id, conversation_id, title, mode, goal, status,
+                estimated_minutes, created_at, updated_at
+            ) VALUES (
+                'scope-session-only', 'scope-course-a', NULL,
+                'Session only', 'study', 'Learn A', 'draft', 30,
+                '2026-07-17T00:00:00+00:00',
+                '2026-07-17T00:00:00+00:00'
+            )
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO agent_runs (
+                id, conversation_id, study_session_id, kind, user_intent, mode,
+                status, provider, model, prompt_version, input_json,
+                idempotency_key, created_at, updated_at
+            ) VALUES (?, ?, ?, 'conversation', 'Learn', 'study', 'queued',
+                      'local', 'fixture', 'v1', '{}', ?,
+                      '2026-07-17T00:00:00+00:00',
+                      '2026-07-17T00:00:00+00:00')
+            """,
+            [
+                (
+                    "scope-run-session",
+                    "scope-conversation-a",
+                    "scope-session-a",
+                    "scope-run-session-key",
+                ),
+                (
+                    "scope-run-conversation",
+                    "scope-conversation-b",
+                    None,
+                    "scope-run-conversation-key",
+                ),
+                (
+                    "scope-run-unscoped",
+                    "scope-conversation-none",
+                    None,
+                    "scope-run-unscoped-key",
+                ),
+                (
+                    "scope-run-session-only",
+                    None,
+                    "scope-session-only",
+                    "scope-run-session-only-key",
+                ),
+            ],
+        )
+        connection.commit()
+
+    assert database.migrate() == [19]
+    assert database.migrate() == []
+    with database.connection() as connection:
+        scopes = {
+            row["id"]: row["course_scope_id"]
+            for row in connection.execute(
+                "SELECT id, course_scope_id FROM agent_runs ORDER BY id"
+            )
+        }
+    assert scopes == {
+        "scope-run-conversation": "scope-course-b",
+        "scope-run-session": "scope-course-a",
+        "scope-run-session-only": "scope-course-a",
+        "scope-run-unscoped": None,
+    }
+    with database.connection() as connection:
+        connection.execute(
+            "DELETE FROM conversations WHERE id = 'scope-conversation-b'"
+        )
+        connection.execute("DELETE FROM study_sessions WHERE id = 'scope-session-only'")
+        connection.execute(
+            "DELETE FROM conversations WHERE id = 'scope-conversation-a'"
+        )
+        connection.execute("DELETE FROM study_sessions WHERE id = 'scope-session-a'")
+        detached = {
+            row["id"]: (
+                row["conversation_id"],
+                row["study_session_id"],
+                row["course_scope_id"],
+            )
+            for row in connection.execute(
+                """
+                SELECT id, conversation_id, study_session_id, course_scope_id
+                FROM agent_runs
+                WHERE id IN (
+                    'scope-run-conversation',
+                    'scope-run-session',
+                    'scope-run-session-only'
+                )
+                ORDER BY id
+                """
+            )
+        }
+        assert detached == {
+            "scope-run-conversation": (None, None, "scope-course-b"),
+            "scope-run-session": (None, None, "scope-course-a"),
+            "scope-run-session-only": (None, None, "scope-course-a"),
+        }
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("DELETE FROM courses WHERE id = 'scope-course-b'")
+        connection.rollback()
+    database.verify_consistency()
