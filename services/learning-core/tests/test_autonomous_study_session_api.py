@@ -155,7 +155,9 @@ def _read_session(client: TestClient, session_id: str, *, course_id: str = COURS
     )
 
 
-def test_autonomous_study_task_response_bounds_source_id_without_rejecting_empty_legacy_value() -> None:
+def test_autonomous_study_task_response_bounds_source_id_without_rejecting_empty_legacy_value() -> (
+    None
+):
     task = {
         "id": "task-source-id-contract",
         "course_id": COURSE_ID,
@@ -167,13 +169,12 @@ def test_autonomous_study_task_response_bounds_source_id_without_rejecting_empty
         "source_type": "manual",
     }
 
-    assert AutonomousStudyTaskResponse.model_validate(
-        {**task, "source_id": ""}
-    ).source_id == ""
+    assert (
+        AutonomousStudyTaskResponse.model_validate({**task, "source_id": ""}).source_id
+        == ""
+    )
     with pytest.raises(ValidationError):
-        AutonomousStudyTaskResponse.model_validate(
-            {**task, "source_id": "x" * 129}
-        )
+        AutonomousStudyTaskResponse.model_validate({**task, "source_id": "x" * 129})
 
 
 def test_start_api_creates_source_grounded_session_and_replays(
