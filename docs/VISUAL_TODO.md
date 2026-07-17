@@ -55,10 +55,10 @@ Status on 2026-07-16: **in progress** at the milestone level; the following live
 | Page | Current rendered behavior | Required real-state visual coverage |
 | --- | --- | --- |
 | Conversation | Live RAG streaming exists, but sent messages/history are not durable and Study mode does not create a Session | persisted history, Ask/Teach/Study/Review/Plan, creation confirmation, restart recovery, Agent activity and interrupted run |
-| Deep Learn | Bundled 31-line eigenvector demo; progress, pause and mastery are illustrative and not persisted | goal confirmation, diagnostic, editable plan, teaching, checkpoint, active recall, practice, summary, pause/resume/recovery and all service/provider failures |
+| Deep Learn | Live Start/Resume can render a persisted plan and bounded source citations from the selected active task; the view is read-only and does not write progress, answers, mastery, or completion. Browser Demo remains explicitly sample-only and makes zero requests. | goal confirmation, diagnostic, editable plan, teaching, checkpoint, active recall, practice, summary, persisted progress/pause/resume/recovery and all service/provider failures |
 | Quiz | Three bundled single-choice items with in-memory score/hints | six real item types, confidence, four hint levels, submit/feedback, mastery evidence/delta, misconception and scheduled review |
 | Flashcards | Bundled sample deck; rating remains in UI state and edit is disabled | real due/empty/front/back/source/edit/delete/error states and Again/Hard/Good/Easy schedule results |
-| Learning Feed | Live course-scoped Snapshot/recommendation Feed renders candidates, persisted tasks and a Plan action with explicit loading/empty/error/offline/cancelled/unknown-reconciliation states; Start/Resume is not implemented | captured course/budget/candidate/task/rationale states; Start/Complete/Snooze/Reschedule/feedback, mutation rollback and Session create/resume |
+| Learning Feed | Live course-scoped Snapshot/recommendation Feed renders candidates, persisted tasks, Plan and Start/Resume actions with explicit loading/empty/error/offline/cancelled/unknown-reconciliation states; Start/Resume opens the real read-only persisted Deep Learn view. | captured course/budget/candidate/task/rationale states; Complete/Snooze/Reschedule/feedback, mutation rollback, persisted progress and Session create/resume visual coverage |
 
 No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: canonical authorization is present, but no authorized HyperKnow screenshot/asset has been captured and accepted into the manifest. Covered protected visuals may now be used for internal implementation after capture; until then, continue with provisional non-branded design values and do not claim parity.
 
@@ -144,6 +144,17 @@ this slice. Therefore Learning Feed and Home/Agent visual rows remain Missing,
 and no visual or pixel-parity claim is made. Desktop Start/Resume is still
 unimplemented; Deep Learn remains its hard-coded demo while a real session
 reader is in progress.
+
+2026-07-17 autonomous Deep Learn note: the live Learning Feed now starts or
+resumes a persisted Study Session and routes to a read-only Deep Learn view
+that renders the stored plan and bounded source citations. Focused desktop and
+source-ID contract tests passed, and independent acceptance found no open
+P0/P1/P2; this is behavioral evidence only. The view does not write learner
+progress, answers, mastery, task completion, or FSRS scheduling. Browser Demo
+remains visibly sample-only and request-free. No screenshot, authorized visual
+reference, visual-diff, or accessibility run was produced, so the Deep Learn
+and Learning Feed visual rows remain Missing and no HyperKnow or pixel-parity
+claim is made.
 
 ## Reference manifest fields
 
