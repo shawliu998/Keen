@@ -70,13 +70,16 @@ class TaskRepository:
             "recommended_reason": recommended_reason,
             "scheduled_for": scheduled_for,
         }
-        existing = self._by_idempotency_key(idempotency_key)
-        if existing is not None:
-            if existing["creation_payload"] != creation_payload:
-                raise ValueError("study task idempotency key was reused")
-            return existing, False
         timestamp = created_at or _now()
         with write_scope(self.connection, commit=commit):
+            # The idempotency lookup must share the write transaction with the
+            # insert.  Looking it up before BEGIN IMMEDIATE lets two sidecars
+            # both observe absence and makes the second hit a UNIQUE error.
+            existing = self._by_idempotency_key(idempotency_key)
+            if existing is not None:
+                if existing["creation_payload"] != creation_payload:
+                    raise ValueError("study task idempotency key was reused")
+                return existing, False
             if concept_id is not None:
                 concept = self.connection.execute(
                     "SELECT 1 FROM concepts WHERE id = ? AND course_id = ?",
@@ -132,6 +135,39 @@ class TaskRepository:
     def get(self, task_id: str) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT * FROM study_tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        return _decode_task(row) if row is not None else None
+
+    def find_active_recommendation(
+        self,
+        *,
+        course_id: str,
+        source_type: str,
+        source_id: str,
+        concept_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return an active task that already covers the real target.
+
+        A source-backed target (review or study session) matches its stable
+        source pair.  A concept-backed target additionally matches older and
+        manual tasks through their real ``concept_id``.  This intentionally
+        avoids treating a missing coordinator payload as permission to create
+        a second active action for the learner.
+        """
+
+        row = self.connection.execute(
+            """
+            SELECT * FROM study_tasks
+            WHERE course_id = ?
+              AND status IN ('upcoming', 'overdue')
+              AND (
+                    (source_type = ? AND source_id = ?)
+                    OR (? IS NOT NULL AND concept_id = ?)
+                  )
+            ORDER BY created_at, id
+            LIMIT 1
+            """,
+            (course_id, source_type, source_id, concept_id, concept_id),
         ).fetchone()
         return _decode_task(row) if row is not None else None
 

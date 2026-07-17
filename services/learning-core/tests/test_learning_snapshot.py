@@ -117,6 +117,27 @@ def test_snapshot_orders_real_components_by_fixed_priority_and_explains_why(tmp_
     )
     assert snapshot.candidates[1].fits_available_minutes is False
     assert snapshot.candidates[2].priority_score > 0
+    assert snapshot.candidates[0].priority_algorithm_version == "feed-priority/1.0.0"
+    assert snapshot.candidates[0].priority_unclamped_score == 0.645833
+    assert snapshot.candidates[0].priority_explanation[0] == (
+        "deadline_urgency: 1.000 × 0.250 = +0.250"
+    )
+    review_components = {
+        component.name: component
+        for component in snapshot.candidates[0].priority_components
+    }
+    session_components = {
+        component.name: component
+        for component in snapshot.candidates[1].priority_components
+    }
+    mastery_components = {
+        component.name: component
+        for component in snapshot.candidates[2].priority_components
+    }
+    assert review_components["deadline_urgency"].raw_value == 1.0
+    assert review_components["effort_penalty"].raw_value == 0.041667
+    assert session_components["effort_penalty"].raw_value == 0.25
+    assert mastery_components["mastery_weakness"].raw_value == 0.8
     assert [task["course_id"] for task in snapshot.pending_tasks] == ["course-calculus"]
 
 

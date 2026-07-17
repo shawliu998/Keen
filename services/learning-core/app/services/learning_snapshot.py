@@ -57,6 +57,16 @@ def _minutes(value: int) -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class LearningPriorityComponent:
+    """JSON-friendly immutable copy of one feed-priority contribution."""
+
+    name: str
+    raw_value: float
+    weight: float
+    contribution: float
+
+
+@dataclass(frozen=True, slots=True)
 class LearningActionCandidate:
     """A product action whose rank and explanation never depend on a model."""
 
@@ -69,6 +79,10 @@ class LearningActionCandidate:
     estimated_minutes: int
     fits_available_minutes: bool
     priority_score: float
+    priority_unclamped_score: float
+    priority_algorithm_version: str
+    priority_components: tuple[LearningPriorityComponent, ...]
+    priority_explanation: tuple[str, ...]
     why: str
 
 
@@ -396,7 +410,7 @@ class LearningSnapshotService:
         why: str,
         sort_key: tuple[object, ...],
     ) -> tuple[tuple[object, ...], LearningActionCandidate]:
-        score = score_feed_candidate(feed_candidate, now=now).score
+        priority = score_feed_candidate(feed_candidate, now=now)
         return sort_key, LearningActionCandidate(
             id=candidate_id,
             action=action,
@@ -406,6 +420,18 @@ class LearningSnapshotService:
             priority_tier=tier,
             estimated_minutes=estimated_minutes,
             fits_available_minutes=estimated_minutes <= available_minutes,
-            priority_score=score,
+            priority_score=priority.score,
+            priority_unclamped_score=priority.unclamped_score,
+            priority_algorithm_version=priority.algorithm_version,
+            priority_components=tuple(
+                LearningPriorityComponent(
+                    name=component.name,
+                    raw_value=component.raw_value,
+                    weight=component.weight,
+                    contribution=component.contribution,
+                )
+                for component in priority.components
+            ),
+            priority_explanation=priority.explanation,
             why=why,
         )

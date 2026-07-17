@@ -109,6 +109,13 @@ no rendered Agent status, Feed recommendation, Deep Learn state, screenshot or
 visual-diff evidence. All autonomous-learning visual rows therefore remain
 Missing; no product-flow or parity claim is made from backend tests.
 
+2026-07-17 autonomous-recommendation note: the backend can now persist one
+real, explainable Study Task from the deterministic Snapshot, including a
+truthful replay/covered/empty outcome. It is not exposed through an API or
+rendered by the desktop in this slice, and no Start action is connected. The
+Home/Feed recommendation, state matrix, screenshot and visual-diff rows remain
+Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

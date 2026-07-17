@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from .mastery import BktParameters
+from .repositories import write_scope
 
 INITIAL_MASTERY_PROBABILITY = 0.2
 INITIAL_MASTERY_ALGORITHM = "bkt"
@@ -81,7 +82,9 @@ class ConceptBootstrapRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
 
-    def bootstrap(self, *, course_id: str, document_id: str) -> ConceptBootstrapResult:
+    def bootstrap(
+        self, *, course_id: str, document_id: str, commit: bool = True
+    ) -> ConceptBootstrapResult:
         """Create or return the one deterministic concept for this source title.
 
         A write lock makes the unique ``(course_id, name)`` constraint a safe
@@ -91,8 +94,7 @@ class ConceptBootstrapRepository:
         as a zero-evidence prior; a missing row with history is rejected.
         """
 
-        try:
-            self.connection.execute("BEGIN IMMEDIATE")
+        with write_scope(self.connection, commit=commit):
             if not self._course_exists(course_id):
                 raise CourseNotFoundError
             source = self._indexed_course_document(course_id, document_id)
@@ -147,7 +149,6 @@ class ConceptBootstrapRepository:
                 mastery = self._mastery(concept_id)
                 if mastery is None:  # pragma: no cover - guarded by the insert above
                     raise RuntimeError("initial mastery did not persist")
-            self.connection.commit()
             return _result(
                 course_id=course_id,
                 document_id=document_id,
@@ -156,10 +157,6 @@ class ConceptBootstrapRepository:
                 concept_created=concept_created,
                 mastery_initialized=mastery_initialized,
             )
-        except Exception:
-            if self.connection.in_transaction:
-                self.connection.rollback()
-            raise
 
     def _course_exists(self, course_id: str) -> bool:
         return (

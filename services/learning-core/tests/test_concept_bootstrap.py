@@ -387,3 +387,112 @@ def test_bootstrap_concurrent_calls_create_one_zero_evidence_concept(database):
             ).fetchone()[0]
             == 0
         )
+
+
+def test_bootstrap_participates_in_caller_owned_commit_and_rollback(database):
+    with database.connection() as connection:
+        _insert_document(
+            connection,
+            document_id="transaction-doc",
+            course_id="course-calculus",
+            section_path='["Caller transaction topic"]',
+        )
+        repository = ConceptBootstrapRepository(connection)
+
+        connection.execute("BEGIN IMMEDIATE")
+        rolled_back = repository.bootstrap(
+            course_id="course-calculus",
+            document_id="transaction-doc",
+            commit=False,
+        )
+        assert connection.in_transaction is True
+        connection.rollback()
+
+        assert (
+            connection.execute(
+                "SELECT 1 FROM concepts WHERE id = ?", (rolled_back.concept_id,)
+            ).fetchone()
+            is None
+        )
+        assert (
+            connection.execute(
+                "SELECT 1 FROM mastery WHERE concept_id = ?",
+                (rolled_back.concept_id,),
+            ).fetchone()
+            is None
+        )
+
+        connection.execute("BEGIN IMMEDIATE")
+        committed = repository.bootstrap(
+            course_id="course-calculus",
+            document_id="transaction-doc",
+            commit=False,
+        )
+        assert connection.in_transaction is True
+        connection.commit()
+
+        assert committed.concept_id == rolled_back.concept_id
+        assert (
+            connection.execute(
+                "SELECT 1 FROM concepts WHERE id = ?", (committed.concept_id,)
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "SELECT probability, attempts FROM mastery WHERE concept_id = ?",
+                (committed.concept_id,),
+            ).fetchone()
+            is not None
+        )
+
+
+def test_bootstrap_commit_false_requires_caller_owned_transaction(database):
+    with database.connection() as connection:
+        _insert_document(
+            connection,
+            document_id="no-transaction-doc",
+            course_id="course-calculus",
+            section_path='["No transaction topic"]',
+        )
+
+        with pytest.raises(RuntimeError, match="caller-owned transaction"):
+            ConceptBootstrapRepository(connection).bootstrap(
+                course_id="course-calculus",
+                document_id="no-transaction-doc",
+                commit=False,
+            )
+
+
+def test_bootstrap_error_does_not_rollback_caller_owned_transaction(database):
+    with database.connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO courses (id, title, description, created_at)
+            VALUES ('caller-pending', 'Caller pending', '',
+                    '2026-07-17T00:00:00+00:00')
+            """
+        )
+
+        with pytest.raises(CourseDocumentUnavailableError):
+            ConceptBootstrapRepository(connection).bootstrap(
+                course_id="course-calculus",
+                document_id="not-linked",
+                commit=False,
+            )
+
+        assert connection.in_transaction is True
+        assert (
+            connection.execute(
+                "SELECT 1 FROM courses WHERE id = 'caller-pending'"
+            ).fetchone()
+            is not None
+        )
+        connection.rollback()
+        assert (
+            connection.execute(
+                "SELECT 1 FROM courses WHERE id = 'caller-pending'"
+            ).fetchone()
+            is None
+        )
