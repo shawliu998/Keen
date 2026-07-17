@@ -116,6 +116,11 @@ rendered by the desktop in this slice, and no Start action is connected. The
 Home/Feed recommendation, state matrix, screenshot and visual-diff rows remain
 Missing.
 
+2026-07-17 autonomous-recommendation API note: authenticated strict resources
+now expose the real Snapshot and persisted recommendation outcome, but this
+backend slice adds no rendered state, screenshot, accessibility result or
+visual-diff artifact. Home/Feed visuals and the Start action remain Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

@@ -64,6 +64,9 @@ from .repository import (
 from .request_guard import RequestGuardMiddleware
 from .routers.agent_mutations import router as agent_mutations_router
 from .routers.agent_runs import router as agent_runs_router
+from .routers.autonomous_recommendation import (
+    router as autonomous_recommendation_router,
+)
 from .retrieval_service import (
     HybridRetrievalService,
     ProviderFactory,
@@ -349,6 +352,7 @@ def create_app(
 
     app.include_router(agent_runs_router)
     app.include_router(agent_mutations_router)
+    app.include_router(autonomous_recommendation_router)
 
     @app.get("/v1/courses", response_model=list[Course])
     def list_courses(repository: LearningRepository = Depends(_repository)):

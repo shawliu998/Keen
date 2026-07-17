@@ -69,6 +69,7 @@ def test_bounded_json_content_length_and_chunked_stream_are_capped_before_parsin
 
     for path in (
         "/v1/answer/stream",
+        "/v1/autonomous-recommendations",
         "/v1/agent/runs/run-1/mutations/mutation-1/undo",
         "/v1/agent/runs/run-1/mutations/mutation-1/redo",
     ):
@@ -103,7 +104,9 @@ def test_unauthorized_request_is_rejected_before_any_body_chunk_is_read() -> Non
         session_token=TOKEN,
         max_document_bytes=8,
     )
-    asyncio.run(middleware(_scope([]), receive, send))
+    asyncio.run(
+        middleware(_scope_for_path("/v1/autonomous-recommendations", []), receive, send)
+    )
 
     assert chunks_read == 0
     assert sent[0]["status"] == 401

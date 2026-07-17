@@ -190,10 +190,18 @@ class AutonomousRecommendationCoordinator:
                 created_at=current_time.isoformat(),
                 commit=False,
             )
+            # Return the authoritative post-write view while the same outer
+            # transaction and write lock are still held.  In particular, a
+            # newly created task must already be present in pending_tasks.
+            updated_snapshot = LearningSnapshotService(self.connection).build(
+                course_id=scoped_course_id,
+                now=current_time,
+                available_minutes=minutes,
+            )
             return AutonomousRecommendationResult(
                 outcome="task_created" if created else "replay",
                 course_id=snapshot.course_id,
-                snapshot=snapshot,
+                snapshot=updated_snapshot,
                 task=task,
                 candidate=candidate,
                 bootstrap=bootstrap,

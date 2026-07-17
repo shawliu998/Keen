@@ -243,6 +243,12 @@ def test_same_day_replays_and_never_creates_a_second_active_task(tmp_path):
     assert replay.outcome == "replay"
     assert created.task is not None and replay.task is not None
     assert replay.task["id"] == created.task["id"]
+    assert created.task["id"] in {
+        str(task["id"]) for task in created.snapshot.pending_tasks
+    }
+    assert replay.task["id"] in {
+        str(task["id"]) for task in replay.snapshot.pending_tasks
+    }
     assert count == 1
 
 

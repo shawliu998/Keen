@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import UTC, datetime
 from typing import Any
@@ -55,6 +56,14 @@ class TaskRepository:
         created_at: str | None = None,
         commit: bool = True,
     ) -> tuple[dict[str, Any], bool]:
+        if (
+            isinstance(priority_score, bool)
+            or not isinstance(priority_score, (int, float))
+            or not math.isfinite(priority_score)
+            or priority_score < 0
+        ):
+            raise ValueError("task priority score must be finite and non-negative")
+        priority_score = float(priority_score)
         creation_payload = {
             "id": task_id,
             "course_id": course_id,
