@@ -367,6 +367,46 @@ class StudyRepository:
             result.append(item)
         return result
 
+    def get_current_or_latest_plan(self, session_id: str) -> dict | None:
+        """Return the plan containing the current unit, otherwise the latest plan.
+
+        Selection and unit loading are read-only.  Relationship validation is
+        intentionally left to the course-scoped service boundary.
+        """
+
+        session = self.connection.execute(
+            "SELECT current_unit_id FROM study_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if session is None:
+            return None
+        current_unit_id = session["current_unit_id"]
+        if current_unit_id is not None:
+            row = self.connection.execute(
+                """
+                SELECT p.id, p.session_id, p.version, p.rationale
+                FROM study_plan_versions p
+                JOIN study_units u ON u.plan_version_id = p.id
+                WHERE u.id = ? AND p.session_id = ?
+                """,
+                (current_unit_id, session_id),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                """
+                SELECT id, session_id, version, rationale
+                FROM study_plan_versions
+                WHERE session_id = ?
+                ORDER BY version DESC, id
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["units"] = self.list_plan_units(str(result["id"]))
+        return result
+
     def create_checkpoint(
         self,
         *,

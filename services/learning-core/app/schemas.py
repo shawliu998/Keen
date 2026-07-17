@@ -485,3 +485,14 @@ class AutonomousStudySessionStartResponse(ApiModel):
         | None
     ) = None
     recovery_action: str | None = Field(default=None, max_length=500)
+
+
+class StudySessionReadResponse(ApiModel):
+    """Bounded persisted state needed to restore the Deep Learn surface."""
+
+    outcome: Literal["ready", "plan_unavailable"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: AutonomousStudySessionResponse
+    plan: AutonomousStudyPlanResponse | None = None
+    current_unit_id: str | None = Field(default=None, max_length=128)
+    recovery_action: str | None = Field(default=None, max_length=500)

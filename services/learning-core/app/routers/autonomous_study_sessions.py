@@ -6,7 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 
 from ..schemas import (
     AutonomousStudyPlanResponse,
@@ -15,10 +15,15 @@ from ..schemas import (
     AutonomousStudySessionStartResponse,
     AutonomousStudySessionUnitResponse,
     AutonomousStudyTaskResponse,
+    StudySessionReadResponse,
 )
 from ..services.autonomous_study_session import (
     AutonomousStudySessionResult,
     AutonomousStudySessionService,
+)
+from ..services.study_session_read import (
+    StudySessionReadResult,
+    StudySessionReadService,
 )
 
 
@@ -35,6 +40,32 @@ def _write_service_error() -> HTTPException:
             "recoveryAction": "Refresh the learning feed and retry. The session may already be saved.",
             "automaticRecovery": False,
             "outcomeMayBeDurable": True,
+        },
+    )
+
+
+def _read_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "code": "study_session_not_found",
+            "message": "No study session is available in the selected course.",
+            "retryable": False,
+            "recoveryAction": "Return to the learning feed and choose an available recommendation.",
+            "automaticRecovery": False,
+        },
+    )
+
+
+def _read_service_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "study_session_temporarily_unavailable",
+            "message": "Keen could not safely restore the local study session.",
+            "retryable": True,
+            "recoveryAction": "Retry. If the problem continues, return to the learning feed.",
+            "automaticRecovery": False,
         },
     )
 
@@ -221,6 +252,70 @@ def _validate_result(
         return
 
     raise ValueError("unknown study session result outcome")
+
+
+def _read_response(result: StudySessionReadResult) -> StudySessionReadResponse:
+    session = _session(result.session)
+    if session is None or session.course_id != result.course_id:
+        raise ValueError("study session read result is outside course scope")
+    plan = _plan(result.plan)
+    if result.outcome == "ready":
+        if plan is None or plan.session_id != session.id:
+            raise ValueError("study session read plan is inconsistent")
+        unit_ids = {unit.id for unit in plan.units}
+        if (
+            result.current_unit_id is not None
+            and result.current_unit_id not in unit_ids
+        ):
+            raise ValueError("study session current unit is outside the plan")
+        recovery_action = None
+    elif result.outcome == "plan_unavailable":
+        if plan is not None or result.current_unit_id is not None:
+            raise ValueError("plan-unavailable study session result is inconsistent")
+        recovery_action = (
+            "Return to the learning feed and start a source-grounded recommendation."
+        )
+    else:
+        raise ValueError("unknown study session read outcome")
+    return StudySessionReadResponse(
+        outcome=result.outcome,
+        course_id=result.course_id,
+        session=session,
+        plan=plan,
+        current_unit_id=result.current_unit_id,
+        recovery_action=recovery_action,
+    )
+
+
+@router.get(
+    "/study-sessions/{session_id}",
+    response_model=StudySessionReadResponse,
+)
+def get_study_session(
+    request: Request,
+    session_id: str = Path(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    ),
+    course_id: str = Query(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    ),
+) -> StudySessionReadResponse:
+    try:
+        with request.app.state.database.connection() as connection:
+            result = StudySessionReadService(connection).get(
+                course_id=course_id, session_id=session_id
+            )
+        if result is None:
+            raise _read_not_found()
+        return _read_response(result)
+    except HTTPException:
+        raise
+    except (sqlite3.Error, RuntimeError, ValueError, LookupError, KeyError, TypeError):
+        raise _read_service_error() from None
 
 
 @router.post(
