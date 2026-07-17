@@ -74,6 +74,7 @@ class LearningActionCandidate:
     action: ActionKind
     target_type: Literal["review_item", "study_session", "concept", "misconception"]
     target_id: str
+    concept_id: str | None
     component: str
     priority_tier: int
     estimated_minutes: int
@@ -232,6 +233,7 @@ class LearningSnapshotService:
                     action="review_due",
                     target_type="review_item",
                     target_id=str(item["id"]),
+                    concept_id=str(item["concept_id"]),
                     component="review_items",
                     tier=1,
                     estimated_minutes=5,
@@ -259,6 +261,7 @@ class LearningSnapshotService:
                     action="resume_study_session",
                     target_type="study_session",
                     target_id=str(session["id"]),
+                    concept_id=None,
                     component="study_sessions",
                     tier=2,
                     estimated_minutes=effort,
@@ -312,6 +315,7 @@ class LearningSnapshotService:
                     action="address_repeated_misconception",
                     target_type="misconception",
                     target_id=str(misconception["id"]),
+                    concept_id=concept_id,
                     component="misconceptions",
                     tier=4,
                     estimated_minutes=15,
@@ -376,6 +380,7 @@ class LearningSnapshotService:
             action=action,
             target_type="concept",
             target_id=concept_id,
+            concept_id=concept_id,
             component="mastery",
             tier=tier,
             estimated_minutes=15,
@@ -401,6 +406,7 @@ class LearningSnapshotService:
             "review_item", "study_session", "concept", "misconception"
         ],
         target_id: str,
+        concept_id: str | None,
         component: str,
         tier: int,
         estimated_minutes: int,
@@ -416,6 +422,7 @@ class LearningSnapshotService:
             action=action,
             target_type=target_type,
             target_id=target_id,
+            concept_id=concept_id,
             component=component,
             priority_tier=tier,
             estimated_minutes=estimated_minutes,

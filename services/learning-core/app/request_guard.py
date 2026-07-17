@@ -20,6 +20,7 @@ BOUNDED_JSON_PATHS = frozenset(
         "/v1/agent/runs",
         "/v1/answer/stream",
         "/v1/autonomous-recommendations",
+        "/v1/autonomous-study-sessions",
         "/v1/courses",
         "/v1/search",
         "/v1/query",

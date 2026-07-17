@@ -101,7 +101,9 @@ class AutonomousStudySessionService:
                 )
 
             existing = self._originating_session(
-                task_id=scoped_task_id, repository=study_repository
+                course_id=scoped_course_id,
+                task_id=scoped_task_id,
+                repository=study_repository,
             )
             if existing is not None:
                 if existing["status"] in _TERMINAL_SESSION_STATUSES:
@@ -177,12 +179,22 @@ class AutonomousStudySessionService:
             )
 
     def _originating_session(
-        self, *, task_id: str, repository: StudyRepository
+        self, *, course_id: str, task_id: str, repository: StudyRepository
     ) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT id FROM study_sessions WHERE originating_task_id = ?", (task_id,)
         ).fetchone()
-        return repository.get_session(str(row["id"])) if row is not None else None
+        if row is None:
+            return None
+        session = repository.get_session(str(row["id"]))
+        if session is None:
+            raise RuntimeError("originating study session disappeared")
+        # Migration 022 enforces this relationship in healthy databases.  Keep
+        # the service boundary defensive so a damaged database can never turn
+        # a same-id lookup into cross-course session disclosure.
+        if session.get("course_id") != course_id:
+            raise RuntimeError("originating study session is outside the course")
+        return session
 
     def _source_session(
         self,

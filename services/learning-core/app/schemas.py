@@ -311,6 +311,7 @@ class LearningActionCandidateResponse(ApiModel):
     ]
     target_type: Literal["review_item", "study_session", "concept", "misconception"]
     target_id: str = Field(min_length=1, max_length=128)
+    concept_id: str | None = Field(default=None, max_length=128)
     component: str = Field(min_length=1, max_length=100)
     priority_tier: int = Field(ge=1, le=10)
     estimated_minutes: int = Field(ge=1, le=1_440)
@@ -382,3 +383,105 @@ class LearningFeedRecommendationResponse(ApiModel):
     task: LearningFeedTaskResponse | None = None
     candidate: LearningActionCandidateResponse | None = None
     bootstrap: ConceptBootstrapResponse | None = None
+
+
+class AutonomousStudySessionRequest(ApiModel):
+    """Start or recover the bounded local study work for one feed task."""
+
+    course_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_LEARNING_IDENTIFIER_PATTERN,
+        strict=True,
+    )
+    task_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_LEARNING_IDENTIFIER_PATTERN,
+        strict=True,
+    )
+
+
+class AutonomousStudyTaskResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    course_id: str = Field(min_length=1, max_length=128)
+    concept_id: str | None = Field(default=None, max_length=128)
+    title: str = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=1, max_length=2_000)
+    estimated_minutes: int = Field(ge=1, le=1_440)
+    status: Literal["upcoming", "overdue", "completed"]
+    source_type: str = Field(min_length=1, max_length=100)
+
+
+class AutonomousStudySessionUnitResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=256)
+    ordinal: int = Field(ge=0, le=7)
+    concept_id: str | None = Field(default=None, max_length=128)
+    concept_ids: list[str] = Field(min_length=1, max_length=8)
+    source_chunk_ids: list[str] = Field(min_length=1, max_length=8)
+    title: str = Field(min_length=1, max_length=500)
+    objective: str = Field(min_length=1, max_length=5_000)
+    content: str = Field(max_length=1_200)
+    estimated_minutes: int = Field(ge=1, le=1_440)
+    status: Literal["locked", "ready", "active", "completed", "skipped"]
+
+
+class AutonomousStudyPlanResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    version: int = Field(ge=1)
+    rationale: str = Field(min_length=1, max_length=2_000)
+    units: list[AutonomousStudySessionUnitResponse] = Field(min_length=2, max_length=8)
+
+
+class AutonomousStudySessionResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    course_id: str = Field(min_length=1, max_length=128)
+    originating_task_id: str | None = Field(default=None, max_length=128)
+    title: str = Field(min_length=1, max_length=500)
+    mode: Literal["teach", "study", "review", "plan"]
+    goal: str = Field(min_length=1, max_length=5_000)
+    estimated_minutes: int = Field(ge=1, le=1_440)
+    status: Literal[
+        "draft",
+        "goal_confirmation",
+        "diagnosing",
+        "planning",
+        "studying",
+        "checkpoint",
+        "active_recall",
+        "practicing",
+        "summarizing",
+        "review_scheduling",
+        "paused",
+        "completed",
+        "cancelled",
+        "failed",
+    ]
+    progress: float = Field(ge=0, le=1, allow_inf_nan=False)
+    revision: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+
+
+class AutonomousStudySessionStartResponse(ApiModel):
+    outcome: Literal["session_created", "resumed", "blocked"]
+    course_id: str = Field(min_length=1, max_length=128)
+    task: AutonomousStudyTaskResponse | None = None
+    session: AutonomousStudySessionResponse | None = None
+    plan: AutonomousStudyPlanResponse | None = None
+    blocked_reason: (
+        Literal[
+            "task_not_found",
+            "task_outside_course",
+            "task_not_actionable",
+            "task_not_autonomous",
+            "task_missing_concept",
+            "source_session_unavailable",
+            "originating_session_terminal",
+            "no_indexed_source",
+        ]
+        | None
+    ) = None
+    recovery_action: str | None = Field(default=None, max_length=500)

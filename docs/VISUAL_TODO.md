@@ -127,6 +127,11 @@ task, but no HTTP Start resource or desktop control is included in this slice.
 Deep Learn/session states, screenshots and visual diffs therefore remain
 Missing.
 
+2026-07-17 autonomous-session API note: the authenticated sidecar now exposes
+the real Start/Resume boundary and bounded cited plan data, but no desktop
+control or rendered study state is included in this backend slice. Deep Learn,
+blocked/created/resumed visuals, screenshots and visual diffs remain Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

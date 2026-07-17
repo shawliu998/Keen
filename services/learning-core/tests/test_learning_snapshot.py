@@ -110,6 +110,13 @@ def test_snapshot_orders_real_components_by_fixed_priority_and_explains_why(tmp_
         4,
         5,
     ]
+    assert [candidate.concept_id for candidate in snapshot.candidates] == [
+        "concept-chain-rule",
+        None,
+        "concept-chain-rule",
+        "concept-chain-rule",
+        "concept-limits",
+    ]
     assert snapshot.candidates[0].target_id == "review-due"
     assert snapshot.candidates[0].component == "review_items"
     assert (

@@ -107,6 +107,7 @@ def _candidate(candidate: LearningActionCandidate) -> LearningActionCandidateRes
         action=candidate.action,
         target_type=candidate.target_type,
         target_id=candidate.target_id,
+        concept_id=candidate.concept_id,
         component=candidate.component,
         priority_tier=candidate.priority_tier,
         estimated_minutes=candidate.estimated_minutes,
