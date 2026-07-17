@@ -58,7 +58,7 @@ Status on 2026-07-16: **in progress** at the milestone level; the following live
 | Deep Learn | Bundled 31-line eigenvector demo; progress, pause and mastery are illustrative and not persisted | goal confirmation, diagnostic, editable plan, teaching, checkpoint, active recall, practice, summary, pause/resume/recovery and all service/provider failures |
 | Quiz | Three bundled single-choice items with in-memory score/hints | six real item types, confidence, four hint levels, submit/feedback, mastery evidence/delta, misconception and scheduled review |
 | Flashcards | Bundled sample deck; rating remains in UI state and edit is disabled | real due/empty/front/back/source/edit/delete/error states and Again/Hard/Good/Easy schedule results |
-| Learning Feed | Live task/mastery rows are displayed read-only | deterministic rationale breakdown, Start/Complete/Snooze/Reschedule/feedback, mutation rollback and Session create/resume |
+| Learning Feed | Live course-scoped Snapshot/recommendation Feed renders candidates, persisted tasks and a Plan action with explicit loading/empty/error/offline/cancelled/unknown-reconciliation states; Start/Resume is not implemented | captured course/budget/candidate/task/rationale states; Start/Complete/Snooze/Reschedule/feedback, mutation rollback and Session create/resume |
 
 No screenshot or current UI fixture for these Demo/read-only surfaces is evidence that the learning workflow is connected. Pixel comparison for the required states also remains blocked: canonical authorization is present, but no authorized HyperKnow screenshot/asset has been captured and accepted into the manifest. Covered protected visuals may now be used for internal implementation after capture; until then, continue with provisional non-branded design values and do not claim parity.
 
@@ -131,6 +131,19 @@ Missing.
 the real Start/Resume boundary and bounded cited plan data, but no desktop
 control or rendered study state is included in this backend slice. Deep Learn,
 blocked/created/resumed visuals, screenshots and visual diffs remain Missing.
+
+2026-07-17 autonomous-learning desktop note: the live Learning Feed now renders
+the authenticated Snapshot and recommendation outcome with course and study-time
+selection, candidates, persisted task state and an explicit Plan action. Its
+loading, empty, error, offline, cancelled and unknown-outcome reconciliation
+states have behavior-test evidence; scope/cache/late-response isolation is also
+tested. Home live mode no longer displays seeded Feed/statistics as learner data,
+while Browser Demo remains visibly sample/request-free. No screenshot,
+accessibility run, authorized reference capture or visual-diff was produced for
+this slice. Therefore Learning Feed and Home/Agent visual rows remain Missing,
+and no visual or pixel-parity claim is made. Desktop Start/Resume is still
+unimplemented; Deep Learn remains its hard-coded demo while a real session
+reader is in progress.
 
 ## Reference manifest fields
 
