@@ -385,6 +385,237 @@ export const studySessionReadResponseSchema = z.object({
   }
 });
 
+/**
+ * The diagnostic is intentionally a self-report checkpoint, rather than an
+ * assessed mastery attempt.  Keeping this wire model separate prevents a UI
+ * caller from treating it as scored evidence.
+ */
+export const diagnosticProgressionRequestSchema = z.object({
+  course_id: learningIdentifierSchema,
+  expected_revision: z.number().int().nonnegative(),
+  idempotency_key: z.string().min(16).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+}).strict();
+
+export const diagnosticAnswerRequestSchema = diagnosticProgressionRequestSchema.extend({
+  response: z.string().min(1).max(8_000).refine((value) => value.trim().length > 0, {
+    message: "Diagnostic responses must contain non-whitespace text.",
+  }),
+  self_assessment: z.enum(["not_yet", "partial", "confident"]),
+}).strict();
+
+export const diagnosticCheckpointSchema = z.object({
+  id: learningIdentifierSchema,
+  session_id: learningIdentifierSchema,
+  unit_id: learningIdentifierSchema,
+  kind: z.literal("diagnostic"),
+  prompt: z.string().min(1).max(6_000),
+  status: z.enum(["pending", "answered"]),
+}).strict();
+
+const diagnosticStateFields = {
+  course_id: learningIdentifierSchema,
+  session: autonomousStudySessionSchema,
+  plan: autonomousStudyPlanSchema,
+  checkpoint: diagnosticCheckpointSchema.nullable(),
+  current_unit: autonomousStudySessionUnitSchema.nullable(),
+  current_unit_id: learningIdentifierSchema.nullable(),
+};
+
+const answeredDiagnosticSessionStatuses = new Set<AutonomousStudySession["status"]>([
+  "studying",
+  "checkpoint",
+  "active_recall",
+  "practicing",
+  "summarizing",
+  "review_scheduling",
+]);
+
+function verifyDiagnosticSessionStatus(
+  status: AutonomousStudySession["status"],
+  expected: "goal_confirmation" | "diagnosing" | "answered",
+  context: z.RefinementCtx,
+): void {
+  // A paused response does not expose resume_from_status, so its preceding
+  // diagnostic state cannot be verified at this boundary.
+  if (status === "paused") return;
+  const matches = expected === "answered"
+    ? answeredDiagnosticSessionStatuses.has(status)
+    : status === expected;
+  if (!matches) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Diagnostic state must match session status ${expected}.`,
+      path: ["session", "status"],
+    });
+  }
+}
+
+function verifyDiagnosticRelationships(
+  result: {
+    course_id: string;
+    session: AutonomousStudySession;
+    plan: AutonomousStudyPlan;
+    checkpoint: DiagnosticCheckpoint | null;
+    current_unit: AutonomousStudySessionUnit | null;
+    current_unit_id: string | null;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (result.session.course_id !== result.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic session must belong to the response course.", path: ["session", "course_id"] });
+  }
+  if (result.plan.session_id !== result.session.id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic plan must belong to the response session.", path: ["plan", "session_id"] });
+  }
+  if (result.checkpoint !== null) {
+    if (result.checkpoint.session_id !== result.session.id) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic checkpoint must belong to the response session.", path: ["checkpoint", "session_id"] });
+    }
+    if (!result.plan.units.some((unit) => unit.id === result.checkpoint?.unit_id && unit.ordinal === 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic checkpoint must be bound to the first plan unit.", path: ["checkpoint", "unit_id"] });
+    }
+  }
+  if (result.current_unit_id !== (result.current_unit?.id ?? null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic current-unit ID must match the returned current unit.", path: ["current_unit_id"] });
+  }
+  if (result.current_unit !== null) {
+    const inPlan = result.plan.units.find((unit) => unit.id === result.current_unit?.id);
+    if (inPlan === undefined || JSON.stringify(inPlan) !== JSON.stringify(result.current_unit)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic current unit must exactly match a plan unit.", path: ["current_unit"] });
+    }
+  }
+}
+
+function verifyAnsweredDiagnostic(
+  result: {
+    checkpoint: DiagnosticCheckpoint;
+    plan: AutonomousStudyPlan;
+    current_unit: AutonomousStudySessionUnit | null;
+    current_unit_id: string | null;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    result.current_unit === null
+    || result.current_unit_id === null
+    || result.current_unit.id !== result.checkpoint.unit_id
+    || result.current_unit.status !== "active"
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "An answered diagnostic must expose its active first checkpoint unit.",
+      path: ["current_unit"],
+    });
+  }
+  const activeUnits = result.plan.units.filter((unit) => unit.status === "active");
+  if (activeUnits.length !== 1 || activeUnits[0]?.id !== result.checkpoint.unit_id) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "An answered diagnostic plan must have exactly its checkpoint unit active.",
+      path: ["plan", "units"],
+    });
+  }
+}
+
+function verifyPendingDiagnostic(
+  result: { checkpoint: DiagnosticCheckpoint; plan: AutonomousStudyPlan },
+  context: z.RefinementCtx,
+): void {
+  const firstUnit = result.plan.units[0];
+  if (firstUnit?.id !== result.checkpoint.unit_id || firstUnit?.status !== "ready") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A pending diagnostic must remain bound to the ready first plan unit.",
+      path: ["checkpoint", "unit_id"],
+    });
+  }
+  if (result.plan.units.some((unit) => unit.status === "active")) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A pending diagnostic plan cannot expose an active unit.",
+      path: ["plan", "units"],
+    });
+  }
+}
+
+function verifyNotStartedDiagnostic(
+  plan: AutonomousStudyPlan,
+  context: z.RefinementCtx,
+): void {
+  if (plan.units[0]?.ordinal !== 0 || plan.units[0]?.status !== "ready") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A not-started diagnostic must expose a ready first plan unit.",
+      path: ["plan", "units", 0, "status"],
+    });
+  }
+  if (plan.units.some((unit) => unit.status === "active")) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A not-started diagnostic plan cannot expose an active unit.",
+      path: ["plan", "units"],
+    });
+  }
+}
+
+export const diagnosticReadResponseSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("not_started"), ...diagnosticStateFields }).strict(),
+  z.object({
+    outcome: z.literal("pending"),
+    ...diagnosticStateFields,
+    checkpoint: diagnosticCheckpointSchema.extend({ status: z.literal("pending") }),
+    current_unit: z.null(),
+    current_unit_id: z.null(),
+  }).strict(),
+  z.object({
+    outcome: z.literal("answered"),
+    ...diagnosticStateFields,
+    checkpoint: diagnosticCheckpointSchema.extend({ status: z.literal("answered") }),
+    current_unit: autonomousStudySessionUnitSchema,
+    current_unit_id: learningIdentifierSchema,
+  }).strict(),
+]).superRefine((result, context) => {
+  verifyDiagnosticRelationships(result, context);
+  if (result.outcome === "not_started" && (
+    result.checkpoint !== null || result.current_unit !== null || result.current_unit_id !== null
+  )) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A not-started diagnostic must not expose a checkpoint or current unit." });
+  }
+  if (result.outcome === "not_started") {
+    verifyDiagnosticSessionStatus(result.session.status, "goal_confirmation", context);
+    verifyNotStartedDiagnostic(result.plan, context);
+  }
+  if (result.outcome === "pending") {
+    verifyDiagnosticSessionStatus(result.session.status, "diagnosing", context);
+    verifyPendingDiagnostic(result, context);
+  }
+  if (result.outcome === "answered") {
+    verifyDiagnosticSessionStatus(result.session.status, "answered", context);
+    verifyAnsweredDiagnostic(result, context);
+  }
+});
+
+export const diagnosticProgressionResponseSchema = z.object({
+  outcome: z.enum(["applied", "replayed"]),
+  ...diagnosticStateFields,
+  checkpoint: diagnosticCheckpointSchema,
+  mastery_changed: z.literal(false),
+  scoring: z.literal("not_performed"),
+}).strict().superRefine((result, context) => {
+  verifyDiagnosticRelationships(result, context);
+  if (result.checkpoint.status === "pending" && (result.current_unit !== null || result.current_unit_id !== null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A pending diagnostic cannot expose a current unit." });
+  }
+  if (result.checkpoint.status === "pending") {
+    verifyDiagnosticSessionStatus(result.session.status, "diagnosing", context);
+    verifyPendingDiagnostic(result, context);
+  }
+  if (result.checkpoint.status === "answered") {
+    verifyDiagnosticSessionStatus(result.session.status, "answered", context);
+    verifyAnsweredDiagnostic(result, context);
+  }
+});
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -687,6 +918,11 @@ export type AutonomousStudyPlan = z.infer<typeof autonomousStudyPlanSchema>;
 export type AutonomousStudySession = z.infer<typeof autonomousStudySessionSchema>;
 export type AutonomousStudySessionStartResponse = z.infer<typeof autonomousStudySessionStartResponseSchema>;
 export type StudySessionReadResponse = z.infer<typeof studySessionReadResponseSchema>;
+export type DiagnosticProgressionRequest = z.input<typeof diagnosticProgressionRequestSchema>;
+export type DiagnosticAnswerRequest = z.input<typeof diagnosticAnswerRequestSchema>;
+export type DiagnosticCheckpoint = z.infer<typeof diagnosticCheckpointSchema>;
+export type DiagnosticReadResponse = z.infer<typeof diagnosticReadResponseSchema>;
+export type DiagnosticProgressionResponse = z.infer<typeof diagnosticProgressionResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

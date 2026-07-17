@@ -27,6 +27,10 @@ import {
   autonomousStudySessionStartResponseSchema,
   courseCreateRequestSchema,
   courseCreateResponseSchema,
+  diagnosticAnswerRequestSchema,
+  diagnosticProgressionRequestSchema,
+  diagnosticProgressionResponseSchema,
+  diagnosticReadResponseSchema,
   demoStateSchema,
   documentCourseLinkResponseSchema,
   documentEmbeddingReindexResponseSchema,
@@ -43,6 +47,10 @@ import {
   type DemoState,
   type CourseCreateRequest,
   type CourseCreateResponse,
+  type DiagnosticAnswerRequest,
+  type DiagnosticProgressionRequest,
+  type DiagnosticProgressionResponse,
+  type DiagnosticReadResponse,
   type AnswerStreamEvent,
   type AutonomousRecommendationRequest,
   type AutonomousRecommendationResponse,
@@ -471,6 +479,84 @@ export class LearningCoreClient {
       studySessionReadResponseSchema,
       options,
       { expectedStatuses: [200], validate: (_status, result) => result.course_id === courseId && result.session.id === sessionId },
+    );
+  }
+
+  getStudySessionDiagnostic(
+    sessionId: string,
+    courseId: string,
+    options: RequestOptions = {},
+  ): Promise<DiagnosticReadResponse> {
+    const path = "/v1/study-sessions/{session_id}/diagnostic";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(courseId, path);
+    const params = new URLSearchParams({ course_id: courseId });
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/diagnostic?${params.toString()}`,
+      diagnosticReadResponseSchema,
+      options,
+      { expectedStatuses: [200], validate: (_status, result) => result.course_id === courseId && result.session.id === sessionId },
+    );
+  }
+
+  beginStudySessionDiagnostic(
+    sessionId: string,
+    request: DiagnosticProgressionRequest,
+    options: RequestOptions = {},
+  ): Promise<DiagnosticProgressionResponse> {
+    const path = "/v1/study-sessions/{session_id}/diagnostic";
+    assertAgentIdentifier(sessionId, path);
+    const parsed = diagnosticProgressionRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/diagnostic`,
+      diagnosticProgressionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200, 201],
+        validate: (status, result) => (
+          (status === 201) === (result.outcome === "applied")
+          && result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+        ),
+      },
+    );
+  }
+
+  answerStudySessionDiagnostic(
+    sessionId: string,
+    checkpointId: string,
+    request: DiagnosticAnswerRequest,
+    options: RequestOptions = {},
+  ): Promise<DiagnosticProgressionResponse> {
+    const path = "/v1/study-sessions/{session_id}/diagnostic/{checkpoint_id}/answer";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(checkpointId, path);
+    const parsed = diagnosticAnswerRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/diagnostic/${encodeURIComponent(checkpointId)}/answer`,
+      diagnosticProgressionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200, 201],
+        validate: (status, result) => (
+          (status === 201) === (result.outcome === "applied")
+          && result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+          && result.checkpoint.id === checkpointId
+        ),
+      },
     );
   }
 

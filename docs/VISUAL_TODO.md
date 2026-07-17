@@ -196,7 +196,7 @@ The 2026-07-17 recoverable-read slice adds a red recoverable-failure dot, grey c
 
 The 2026-07-17 Level 2 slice adds a Home Agent confirmation card with a safe task/course/effect summary, Confirm/Reject controls, pending feedback, offline blocking and explicit unknown-outcome copy. Component/runtime tests cover those states. The visual harness was rerun at 1440×920 against the deterministic Home route and produced `missing_reference`; that route does not fixture a live waiting-approval run, and no authorized HyperKnow reference is present. Approval-card spacing, typography, button treatment and responsive behavior therefore remain `implemented / unverified` visually, with no mismatch percentage or parity claim.
 
-The 2026-07-17 diagnostic-progression backend slice adds no rendered UI and produced no screenshot or visual-diff evidence. The future Deep Learn reflection, self-assessment, unknown-outcome recovery and first-active-unit states therefore remain open visual work; backend/API verification is not visual verification.
+The 2026-07-17 diagnostic-progression backend slice initially added no rendered UI. The subsequent live Deep Learn client now renders the opening reflection, three self-assessment controls, pending/error/unknown/cancelled recovery, paused read-only state and first-active-unit handoff. Component and contract tests cover behavior, but no screenshot, accessibility audit or authorized visual diff was produced. Spacing, responsive treatment and parity therefore remain `implemented / unverified` visual work.
 
 | Date | Reference ID | Route/state | Viewport | Seed | Mismatch | Artifact paths | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
