@@ -121,6 +121,12 @@ now expose the real Snapshot and persisted recommendation outcome, but this
 backend slice adds no rendered state, screenshot, accessibility result or
 visual-diff artifact. Home/Feed visuals and the Start action remain Missing.
 
+2026-07-17 autonomous-session note: migration 022 and the backend coordinator
+can create or recover a source-cited Study Session from a persisted autonomous
+task, but no HTTP Start resource or desktop control is included in this slice.
+Deep Learn/session states, screenshots and visual diffs therefore remain
+Missing.
+
 ## Reference manifest fields
 
 Every accepted reference should have a manifest entry with:

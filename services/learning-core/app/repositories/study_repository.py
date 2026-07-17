@@ -82,6 +82,8 @@ class StudyRepository:
         preferences: dict[str, JsonValue] | None = None,
         difficulty: dict[str, JsonValue] | None = None,
         conversation_id: str | None = None,
+        originating_task_id: str | None = None,
+        created_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         if mode not in {"teach", "study", "review", "plan"}:
@@ -93,21 +95,22 @@ class StudyRepository:
         ):
             if value is not None and not isinstance(value, dict):
                 raise ValueError(f"{label} must be an object")
-        now = _now()
+        now = created_at or _now()
         with write_scope(self.connection, commit=commit):
             self.connection.execute(
                 """
                 INSERT INTO study_sessions
-                    (id, course_id, conversation_id, title, mode, goal,
+                    (id, course_id, conversation_id, originating_task_id, title, mode, goal,
                      goal_scope_json, preferences_json, difficulty_json, status,
                      resume_from_status, revision, progress, estimated_minutes,
                      created_at, updated_at, started_at, finished_at, current_unit_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, 0, 0, ?, ?, ?, NULL, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, 0, 0, ?, ?, ?, NULL, NULL, NULL)
                 """,
                 (
                     session_id,
                     course_id,
                     conversation_id,
+                    originating_task_id,
                     title,
                     mode,
                     goal,
@@ -177,6 +180,7 @@ class StudyRepository:
         expected_revision: int,
         progress: float | None = None,
         current_unit_id: str | None = None,
+        updated_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         current = self._require_session(session_id)
@@ -198,7 +202,7 @@ class StudyRepository:
             )
         if progress is not None and not 0 <= progress <= 1:
             raise ValueError("progress must be between 0 and 1")
-        now = _now()
+        now = updated_at or _now()
         terminal = status in {"completed", "cancelled", "failed"}
         with write_scope(self.connection, commit=commit):
             if current_unit_id is not None:
@@ -250,11 +254,12 @@ class StudyRepository:
         version: int,
         rationale: str,
         units: list[StudyUnitInput],
+        created_at: str | None = None,
         commit: bool = True,
     ) -> dict:
         if version < 1 or not 2 <= len(units) <= 8:
             raise ValueError("a plan needs a positive version and 2 to 8 units")
-        now = _now()
+        now = created_at or _now()
         with write_scope(self.connection, commit=commit):
             session = self.connection.execute(
                 "SELECT course_id FROM study_sessions WHERE id = ?", (session_id,)

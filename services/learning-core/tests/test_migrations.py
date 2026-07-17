@@ -66,6 +66,65 @@ def test_migrated_database_passes_consistency_check(tmp_path):
     database.verify_consistency()
 
 
+def test_022_task_session_link_is_unique_and_course_scoped(tmp_path):
+    database = Database(tmp_path / "task-session-link.sqlite3")
+    database.migrate()
+    database.seed_demo()
+    now = "2026-07-17T00:00:00+00:00"
+    with database.connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO study_sessions
+                (id, course_id, originating_task_id, title, mode, goal, status,
+                 estimated_minutes, created_at, updated_at)
+            VALUES ('task-session', 'course-calculus', 'task-chain-rule',
+                    'Task session', 'study', 'Learn', 'draft', 10, ?, ?)
+            """,
+            (now, now),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+            connection.execute(
+                """
+                INSERT INTO study_sessions
+                    (id, course_id, originating_task_id, title, mode, goal, status,
+                     estimated_minutes, created_at, updated_at)
+                VALUES ('duplicate-task-session', 'course-calculus', 'task-chain-rule',
+                        'Duplicate', 'study', 'Learn', 'draft', 10, ?, ?)
+                """,
+                (now, now),
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError, match="originating task does not belong"
+        ):
+            connection.execute(
+                """
+                INSERT INTO study_sessions
+                    (id, course_id, originating_task_id, title, mode, goal, status,
+                     estimated_minutes, created_at, updated_at)
+                VALUES ('cross-course-task-session', 'course-physics', 'task-chain-rule',
+                        'Wrong course', 'study', 'Learn', 'draft', 10, ?, ?)
+                """,
+                (now, now),
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="originating task course cannot differ",
+        ):
+            connection.execute(
+                "UPDATE study_tasks SET course_id = 'course-physics' "
+                "WHERE id = 'task-chain-rule'"
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError, match="originating task does not belong"
+        ):
+            connection.execute(
+                "UPDATE study_sessions SET course_id = 'course-physics' "
+                "WHERE id = 'task-session'"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            connection.execute("DELETE FROM study_tasks WHERE id = 'task-chain-rule'")
+
+
 def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
     tmp_path,
 ):
@@ -101,7 +160,7 @@ def test_embedding_migration_is_forward_only_without_fabricating_legacy_vectors(
 
     applied = database.migrate()
     assert applied[:3] == [6, 7, 8]
-    assert applied[3:] == list(range(9, 22))
+    assert applied[3:] == list(range(9, 23))
     with database.connection() as connection:
         assert (
             connection.execute(
@@ -182,7 +241,7 @@ def test_migration_007_forward_repairs_early_006_model_immutability(tmp_path):
 
     applied = database.migrate()
     assert applied[:2] == [7, 8]
-    assert applied[2:] == list(range(9, 22))
+    assert applied[2:] == list(range(9, 23))
     with database.connection() as connection:
         trigger = connection.execute(
             """
@@ -253,7 +312,7 @@ def test_learning_loop_migrations_preserve_existing_008_learning_state(tmp_path)
         )
         connection.commit()
 
-    assert database.migrate() == list(range(9, 22))
+    assert database.migrate() == list(range(9, 23))
     database.verify_consistency()
     with database.connection() as connection:
         mastery = connection.execute(
@@ -562,7 +621,7 @@ def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
         )
         connection.commit()
 
-    assert database.migrate() == [18, 19, 20, 21]
+    assert database.migrate() == [18, 19, 20, 21, 22]
     assert database.migrate() == []
     database.verify_consistency()
     with database.connection() as connection:
@@ -608,7 +667,7 @@ def test_018_forward_upgrade_preserves_existing_agent_audit_and_is_idempotent(
         "undone_at": None,
         "undone_by_tool_invocation_id": None,
     }
-    assert versions == list(range(1, 22))
+    assert versions == list(range(1, 23))
     assert trigger_count == 7
 
 
@@ -717,7 +776,7 @@ def test_019_backfills_agent_course_scope_from_persisted_context(tmp_path):
         )
         connection.commit()
 
-    assert database.migrate() == [19, 20, 21]
+    assert database.migrate() == [19, 20, 21, 22]
     assert database.migrate() == []
     with database.connection() as connection:
         scopes = {
