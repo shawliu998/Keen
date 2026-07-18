@@ -823,6 +823,131 @@ export const activeRecallProgressionResponseSchema = z.object({
   verifyActiveRecallOutcome({ ...result, outcome }, context);
 });
 
+/**
+ * Learner-safe targeted-practice contract. It intentionally carries only the
+ * next prompt and deterministic result, never its source, answer key, or
+ * assessment/ledger metadata.
+ */
+export const targetedPracticeProgressionRequestSchema = z.object({
+  course_id: learningIdentifierSchema,
+  expected_revision: z.number().int().nonnegative(),
+  idempotency_key: z.string().min(16).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+}).strict();
+
+export const targetedPracticeAnswerRequestSchema = targetedPracticeProgressionRequestSchema.extend({
+  response: z.string().min(1).max(8_000).refine((value) => value.trim().length > 0, {
+    message: "Practice responses must contain non-whitespace text.",
+  }),
+}).strict();
+
+export const targetedPracticeCheckpointSchema = z.object({
+  id: learningIdentifierSchema,
+  kind: z.literal("practice"),
+  prompt: z.string().min(1).max(1_400),
+  status: z.enum(["pending", "answered", "skipped"]),
+  created_at: isoDateTimeSchema,
+  answered_at: isoDateTimeSchema.nullable(),
+}).strict();
+
+export const targetedPracticeRunSchema = z.object({
+  id: learningIdentifierSchema,
+  status: z.enum(["pending", "answered", "cancelled"]),
+  checkpoint_id: learningIdentifierSchema,
+  generator_version: z.string().min(1).max(128),
+  created_at: isoDateTimeSchema,
+  answered_at: isoDateTimeSchema.nullable(),
+  cancelled_at: isoDateTimeSchema.nullable(),
+  cancellation_reason: z.enum(["session_cancelled", "session_failed"]).nullable(),
+}).strict();
+
+type TargetedPracticeState = {
+  course_id: string;
+  session: z.infer<typeof activeRecallSessionSchema>;
+  plan: z.infer<typeof activeRecallPlanSchema>;
+  checkpoint: z.infer<typeof targetedPracticeCheckpointSchema> | null;
+  current_unit: z.infer<typeof activeRecallPlanUnitSchema> | null;
+  run: z.infer<typeof targetedPracticeRunSchema> | null;
+  grade: z.infer<typeof activeRecallGradeSchema> | null;
+};
+
+function verifyTargetedPracticeState(result: TargetedPracticeState, context: z.RefinementCtx): void {
+  // The public session/plan/unit/grade projections intentionally share the
+  // active-recall shape. Reuse its relationship checks without accepting its
+  // checkpoint or run types.
+  verifyActiveRecallState({
+    ...result,
+    checkpoint: result.checkpoint === null ? null : { ...result.checkpoint, kind: "active_recall" as const },
+    run: result.run === null ? null : result.run,
+  }, context);
+}
+
+function verifyTargetedPracticeOutcome(
+  result: TargetedPracticeState & { outcome: "not_started" | "pending" | "answered" | "cancelled" },
+  context: z.RefinementCtx,
+  allowLateReplay = false,
+): void {
+  verifyTargetedPracticeState(result, context);
+  const answeredStatuses = allowLateReplay
+    ? ["studying", "checkpoint", "active_recall", "practicing", "summarizing", "review_scheduling", "completed", "cancelled", "failed"]
+    : ["summarizing", "review_scheduling", "completed", "cancelled", "failed"];
+  const statusMatchesOutcome = (result.session.status === "paused" && result.outcome !== "cancelled")
+    || (result.outcome === "not_started" && result.session.status === "practicing")
+    || (result.outcome === "pending" && result.session.status === "practicing")
+    || (result.outcome === "answered" && answeredStatuses.includes(result.session.status))
+    || (result.outcome === "cancelled" && ["cancelled", "failed"].includes(result.session.status));
+  if (!statusMatchesOutcome) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Practice outcome is outside the session phase.", path: ["session", "status"] });
+  }
+  if (result.outcome === "not_started") {
+    if (result.checkpoint !== null || result.run !== null || result.grade !== null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A not-started practice result cannot include run data." });
+    }
+    return;
+  }
+  // A session can be cancelled before any practice was created.
+  if (result.outcome === "cancelled" && result.checkpoint === null && result.run === null) {
+    if (result.grade !== null) context.addIssue({ code: z.ZodIssueCode.custom, message: "A pre-practice cancellation cannot include a grade." });
+    return;
+  }
+  if (result.checkpoint === null || result.run === null || result.run.checkpoint_id !== result.checkpoint.id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Practice run and checkpoint must match." });
+    return;
+  }
+  const valid = result.outcome === "pending"
+    ? result.run.status === "pending" && result.checkpoint.status === "pending" && result.grade === null
+    : result.outcome === "answered"
+      ? result.run.status === "answered" && result.checkpoint.status === "answered" && result.grade !== null
+      : result.run.status === "cancelled" && result.checkpoint.status === "skipped" && result.grade === null;
+  if (!valid) context.addIssue({ code: z.ZodIssueCode.custom, message: "Practice outcome does not match its checkpoint, run, and grade." });
+}
+
+const targetedPracticeReadStateFields = {
+  course_id: learningIdentifierSchema,
+  session: activeRecallSessionSchema,
+  plan: activeRecallPlanSchema,
+  checkpoint: targetedPracticeCheckpointSchema.nullable(),
+  current_unit: activeRecallPlanUnitSchema.nullable(),
+  run: targetedPracticeRunSchema.nullable(),
+  grade: activeRecallGradeSchema.nullable(),
+};
+
+export const targetedPracticeReadResponseSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("not_started"), ...targetedPracticeReadStateFields }).strict(),
+  z.object({ outcome: z.literal("pending"), ...targetedPracticeReadStateFields }).strict(),
+  z.object({ outcome: z.literal("answered"), ...targetedPracticeReadStateFields }).strict(),
+  z.object({ outcome: z.literal("cancelled"), ...targetedPracticeReadStateFields }).strict(),
+]).superRefine(verifyTargetedPracticeOutcome);
+
+export const targetedPracticeProgressionResponseSchema = z.object({
+  outcome: z.enum(["applied", "replayed"]),
+  ...targetedPracticeReadStateFields,
+  checkpoint: targetedPracticeCheckpointSchema,
+  run: targetedPracticeRunSchema,
+}).strict().superRefine((result, context) => {
+  const outcome = result.run.status === "pending" ? "pending" : result.run.status === "answered" ? "answered" : "cancelled";
+  verifyTargetedPracticeOutcome({ ...result, outcome }, context, result.outcome === "replayed");
+});
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -1140,6 +1265,12 @@ export type ActiveRecallRun = z.infer<typeof activeRecallRunSchema>;
 export type ActiveRecallGrade = z.infer<typeof activeRecallGradeSchema>;
 export type ActiveRecallReadResponse = z.infer<typeof activeRecallReadResponseSchema>;
 export type ActiveRecallProgressionResponse = z.infer<typeof activeRecallProgressionResponseSchema>;
+export type TargetedPracticeProgressionRequest = z.input<typeof targetedPracticeProgressionRequestSchema>;
+export type TargetedPracticeAnswerRequest = z.input<typeof targetedPracticeAnswerRequestSchema>;
+export type TargetedPracticeCheckpoint = z.infer<typeof targetedPracticeCheckpointSchema>;
+export type TargetedPracticeRun = z.infer<typeof targetedPracticeRunSchema>;
+export type TargetedPracticeReadResponse = z.infer<typeof targetedPracticeReadResponseSchema>;
+export type TargetedPracticeProgressionResponse = z.infer<typeof targetedPracticeProgressionResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

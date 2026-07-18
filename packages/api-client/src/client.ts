@@ -29,6 +29,10 @@ import {
   activeRecallProgressionRequestSchema,
   activeRecallProgressionResponseSchema,
   activeRecallReadResponseSchema,
+  targetedPracticeAnswerRequestSchema,
+  targetedPracticeProgressionRequestSchema,
+  targetedPracticeProgressionResponseSchema,
+  targetedPracticeReadResponseSchema,
   courseCreateRequestSchema,
   courseCreateResponseSchema,
   diagnosticAnswerRequestSchema,
@@ -64,6 +68,10 @@ import {
   type ActiveRecallProgressionRequest,
   type ActiveRecallProgressionResponse,
   type ActiveRecallReadResponse,
+  type TargetedPracticeAnswerRequest,
+  type TargetedPracticeProgressionRequest,
+  type TargetedPracticeProgressionResponse,
+  type TargetedPracticeReadResponse,
   type DocumentImportResponse,
   type DocumentCourseLinkResponse,
   type GroundedQueryResponse,
@@ -646,6 +654,89 @@ export class LearningCoreClient {
           && result.run.id === runId
           && result.run.status === "answered"
           && (result.outcome !== "applied" || result.session.status === "practicing")
+        ),
+      },
+    );
+  }
+
+  getStudySessionPractice(
+    sessionId: string,
+    courseId: string,
+    options: RequestOptions = {},
+  ): Promise<TargetedPracticeReadResponse> {
+    const path = "/v1/study-sessions/{session_id}/practice";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(courseId, path);
+    const params = new URLSearchParams({ course_id: courseId });
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/practice?${params.toString()}`,
+      targetedPracticeReadResponseSchema,
+      options,
+      { expectedStatuses: [200], validate: (_status, result) => result.course_id === courseId && result.session.id === sessionId },
+    );
+  }
+
+  beginStudySessionPractice(
+    sessionId: string,
+    request: TargetedPracticeProgressionRequest,
+    options: RequestOptions = {},
+  ): Promise<TargetedPracticeProgressionResponse> {
+    const path = "/v1/study-sessions/{session_id}/practice";
+    assertAgentIdentifier(sessionId, path);
+    const parsed = targetedPracticeProgressionRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/practice`,
+      targetedPracticeProgressionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200, 201],
+        validate: (status, result) => (
+          (status === 201) === (result.outcome === "applied")
+          && result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+          && (result.outcome !== "applied" || (
+            result.run.status === "pending"
+            && result.session.status === "practicing"
+          ))
+        ),
+      },
+    );
+  }
+
+  answerStudySessionPractice(
+    sessionId: string,
+    runId: string,
+    request: TargetedPracticeAnswerRequest,
+    options: RequestOptions = {},
+  ): Promise<TargetedPracticeProgressionResponse> {
+    const path = "/v1/study-sessions/{session_id}/practice/{run_id}/answer";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(runId, path);
+    const parsed = targetedPracticeAnswerRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/practice/${encodeURIComponent(runId)}/answer`,
+      targetedPracticeProgressionResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200],
+        validate: (_status, result) => (
+          result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+          && result.run.id === runId
+          && result.run.status === "answered"
+          && (result.outcome !== "applied" || result.session.status === "summarizing")
         ),
       },
     );
