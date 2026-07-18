@@ -397,7 +397,7 @@ def test_migration_023_preserves_legacy_answered_diagnostic_and_database_health(
             ),
         )
         connection.commit()
-    assert database.migrate() == [23, 24, 25]
+    assert database.migrate() == [23, 24, 25, 26]
     assert database.migrate() == []
     with database.connection() as connection:
         legacy = connection.execute(

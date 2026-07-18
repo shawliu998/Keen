@@ -41,7 +41,7 @@ describe("Deep Learn targeted practice", () => {
     expect(core.setInspector).toHaveBeenCalledWith({ eyebrow: "Targeted practice", title: "Source details hidden", body: "Source details stay hidden while you answer this practice prompt." });
   });
 
-  it("begins and records a practice response with no Review or FSRS claim", async () => {
+  it("begins and records a practice response before the summary schedules review", async () => {
     const user = userEvent.setup();
     const client = clientBase(practiceNotStarted);
     client.beginStudySessionPractice = vi.fn(async () => ({ ...practicePending, outcome: "applied" as const }));
@@ -50,7 +50,7 @@ describe("Deep Learn targeted practice", () => {
     await user.click(await screen.findByRole("button", { name: "Begin practice" }));
     await user.type(await screen.findByLabelText("Your response"), "target term");
     await user.click(screen.getByRole("button", { name: "Submit response" }));
-    expect(await screen.findByText(/One practice mastery observation was recorded; no Review or FSRS schedule changed/)).toBeInTheDocument();
+    expect(await screen.findByText(/One practice mastery observation was recorded. Finish the local learning summary to schedule review/)).toBeInTheDocument();
     expect(client.beginStudySessionPractice).toHaveBeenCalledWith("session-1", expect.objectContaining({ expected_revision: 4, course_id: "course-1", idempotency_key: expect.any(String) }), expect.anything());
     expect(client.answerStudySessionPractice).toHaveBeenCalledWith("session-1", "practice-run", expect.objectContaining({ expected_revision: 4, response: "target term" }), expect.anything());
   });

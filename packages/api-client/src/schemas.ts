@@ -948,6 +948,115 @@ export const targetedPracticeProgressionResponseSchema = z.object({
   verifyTargetedPracticeOutcome({ ...result, outcome }, context, result.outcome === "replayed");
 });
 
+/**
+ * Learner-safe end-of-session summary.  This boundary intentionally contains
+ * aggregate, deterministic outcomes only: it never returns prompts, learner
+ * answers, source data, concept/assessment identifiers, or the persisted
+ * review-card lineage.
+ */
+export const studySummaryRequestSchema = z.object({
+  course_id: learningIdentifierSchema,
+  expected_revision: z.number().int().nonnegative(),
+  idempotency_key: z.string().min(16).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+}).strict();
+
+const studySummarySessionSchema = z.object({
+  id: learningIdentifierSchema,
+  course_id: learningIdentifierSchema,
+  status: z.enum(["summarizing", "review_scheduling", "paused", "completed", "cancelled", "failed"]),
+  revision: z.number().int().nonnegative(),
+  progress: finiteNumberSchema.min(0).max(1),
+  estimated_minutes: z.number().int().min(1).max(1_440),
+  created_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
+  started_at: isoDateTimeSchema.nullable(),
+  finished_at: isoDateTimeSchema.nullable(),
+}).strict();
+
+const studySummaryMetricsSchema = z.object({
+  active_recall_correct: z.boolean(),
+  practice_correct: z.boolean(),
+  practice_score: finiteNumberSchema.min(0).max(1),
+  practice_max_score: finiteNumberSchema.gt(0).max(1),
+  task_completed: z.boolean(),
+  remaining_units: z.number().int().min(0).max(7),
+}).strict().superRefine((metrics, context) => {
+  if ((metrics.practice_correct && metrics.practice_score !== metrics.practice_max_score)
+    || (!metrics.practice_correct && metrics.practice_score !== 0)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Summary practice scores must describe deterministic binary grading." });
+  }
+});
+
+const studySummaryReviewSchema = z.object({
+  due_at: isoDateTimeSchema,
+  scheduler: z.literal("fsrs"),
+  scheduler_version: z.string().min(1).max(128),
+  state: z.literal("new"),
+}).strict();
+
+const studySummaryFields = {
+  course_id: learningIdentifierSchema,
+  session: studySummarySessionSchema,
+  summary: studySummaryMetricsSchema.nullable(),
+  review: studySummaryReviewSchema.nullable(),
+};
+
+function verifyStudySummaryState(
+  result: {
+    course_id: string;
+    session: z.infer<typeof studySummarySessionSchema>;
+    summary: z.infer<typeof studySummaryMetricsSchema> | null;
+    review: z.infer<typeof studySummaryReviewSchema> | null;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (result.course_id !== result.session.course_id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Summary session must belong to the response course.", path: ["session", "course_id"] });
+  }
+  if (timestampIsAfter(result.session.created_at, result.session.updated_at)
+    || (result.session.started_at !== null && timestampIsAfter(result.session.created_at, result.session.started_at))
+    || (result.session.finished_at !== null && timestampIsAfter(result.session.created_at, result.session.finished_at))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Summary session timestamps are inconsistent.", path: ["session"] });
+  }
+}
+
+export const studySummaryReadResponseSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("ready"), ...studySummaryFields }).strict(),
+  z.object({ outcome: z.literal("completed"), ...studySummaryFields }).strict(),
+  z.object({ outcome: z.literal("cancelled"), ...studySummaryFields }).strict(),
+]).superRefine((result, context) => {
+  verifyStudySummaryState(result, context);
+  if (result.outcome === "ready") {
+    if (!["summarizing", "review_scheduling", "paused"].includes(result.session.status)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "An unfinalized summary must be in the summary phase.", path: ["session", "status"] });
+    }
+    if (result.summary === null || result.review !== null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "An unfinalized summary needs both deterministic metrics and no scheduled review." });
+    }
+  } else if (result.outcome === "completed") {
+    if (result.session.status !== "completed" || result.summary === null || result.review === null || result.session.finished_at === null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A completed summary must represent one scheduled review and a finished session." });
+    }
+  } else if (!["cancelled", "failed"].includes(result.session.status) || result.review !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A cancelled summary cannot claim a scheduled review.", path: ["session", "status"] });
+  }
+});
+
+export const studySummaryFinalizeResponseSchema = z.object({
+  outcome: z.enum(["applied", "replayed"]),
+  ...studySummaryFields,
+}).strict().superRefine((result, context) => {
+  verifyStudySummaryState(result, context);
+  if (
+    result.session.status !== "completed"
+    || result.session.finished_at === null
+    || result.summary === null
+    || result.review === null
+  ) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A summary finalization must finish the session and schedule one local review." });
+  }
+});
+
 export const studyTaskSchema = z.object({
   id: z.string().min(1),
   course_id: z.string().min(1),
@@ -1271,6 +1380,9 @@ export type TargetedPracticeCheckpoint = z.infer<typeof targetedPracticeCheckpoi
 export type TargetedPracticeRun = z.infer<typeof targetedPracticeRunSchema>;
 export type TargetedPracticeReadResponse = z.infer<typeof targetedPracticeReadResponseSchema>;
 export type TargetedPracticeProgressionResponse = z.infer<typeof targetedPracticeProgressionResponseSchema>;
+export type StudySummaryRequest = z.input<typeof studySummaryRequestSchema>;
+export type StudySummaryReadResponse = z.infer<typeof studySummaryReadResponseSchema>;
+export type StudySummaryFinalizeResponse = z.infer<typeof studySummaryFinalizeResponseSchema>;
 export type StudyTask = z.infer<typeof studyTaskSchema>;
 export type MasteryState = z.infer<typeof masteryStateSchema>;
 export type DemoState = z.infer<typeof demoStateSchema>;

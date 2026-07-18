@@ -107,6 +107,18 @@ def _is_study_practice_action(path: object) -> bool:
     return begin or answer
 
 
+def _is_study_summary_action(path: object) -> bool:
+    if not isinstance(path, str):
+        return False
+    segments = path.split("/")
+    return (
+        len(segments) == 5
+        and segments[1:3] == ["v1", "study-sessions"]
+        and bool(segments[3])
+        and segments[4] == "summary"
+    )
+
+
 class _RequestBodyTooLarge(Exception):
     """Internal control flow used to stop downstream parsing immediately."""
 
@@ -173,6 +185,7 @@ class RequestGuardMiddleware:
             or _is_study_diagnostic_action(path)
             or _is_study_active_recall_action(path)
             or _is_study_practice_action(path)
+            or _is_study_summary_action(path)
         )
         if not is_document_import and not is_bounded_json:
             await self.app(scope, receive, send)

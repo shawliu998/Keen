@@ -659,6 +659,62 @@ class StudyRepository:
             # itself stopped being active before its status is actually changed.
         return self._require_session(session_id)
 
+    def complete_current_unit(
+        self,
+        *,
+        session_id: str,
+        unit_id: str,
+        expected_revision: int,
+        updated_at: str | None = None,
+        commit: bool = True,
+    ) -> dict:
+        """Atomically detach and complete the one current active unit."""
+
+        if commit:
+            raise ValueError("complete_current_unit requires commit=False")
+        now = updated_at or _now()
+        with write_scope(self.connection, commit=False):
+            row = self.connection.execute(
+                """SELECT s.current_unit_id, u.status FROM study_sessions s
+                   LEFT JOIN study_units u ON u.id = s.current_unit_id
+                   WHERE s.id = ? AND s.revision = ?""",
+                (session_id, expected_revision),
+            ).fetchone()
+            if (
+                row is None
+                or row["current_unit_id"] != unit_id
+                or row["status"] != "active"
+            ):
+                raise RuntimeError("study session revision conflict")
+            cleared = self.connection.execute(
+                """UPDATE study_sessions SET current_unit_id = NULL, updated_at = ?
+                   WHERE id = ? AND revision = ? AND current_unit_id = ?""",
+                (now, session_id, expected_revision, unit_id),
+            )
+            if cleared.rowcount != 1:
+                raise RuntimeError("study session revision conflict")
+            completed = self.connection.execute(
+                "UPDATE study_units SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active'",
+                (now, unit_id),
+            )
+            if completed.rowcount != 1:
+                raise RuntimeError("study unit is not active for completion")
+            self._append_event(
+                session_id,
+                "unit_changed",
+                {"unit_id": unit_id, "from": "active", "to": "completed"},
+                now,
+            )
+        row = self.connection.execute(
+            "SELECT * FROM study_units WHERE id = ?", (unit_id,)
+        ).fetchone()
+        if row is None:  # pragma: no cover
+            raise RuntimeError("study unit disappeared")
+        result = dict(row)
+        result["concept_ids"] = load_json(result.pop("concept_ids_json"))
+        result["source_chunk_ids"] = load_json(result.pop("source_chunk_ids_json"))
+        return result
+
     def recover_active_sessions(self, *, commit: bool = True) -> list[str]:
         now = _now()
         active = tuple(

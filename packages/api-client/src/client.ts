@@ -33,6 +33,9 @@ import {
   targetedPracticeProgressionRequestSchema,
   targetedPracticeProgressionResponseSchema,
   targetedPracticeReadResponseSchema,
+  studySummaryFinalizeResponseSchema,
+  studySummaryReadResponseSchema,
+  studySummaryRequestSchema,
   courseCreateRequestSchema,
   courseCreateResponseSchema,
   diagnosticAnswerRequestSchema,
@@ -72,6 +75,9 @@ import {
   type TargetedPracticeProgressionRequest,
   type TargetedPracticeProgressionResponse,
   type TargetedPracticeReadResponse,
+  type StudySummaryFinalizeResponse,
+  type StudySummaryReadResponse,
+  type StudySummaryRequest,
   type DocumentImportResponse,
   type DocumentCourseLinkResponse,
   type GroundedQueryResponse,
@@ -737,6 +743,53 @@ export class LearningCoreClient {
           && result.run.id === runId
           && result.run.status === "answered"
           && (result.outcome !== "applied" || result.session.status === "summarizing")
+        ),
+      },
+    );
+  }
+
+  getStudySessionSummary(
+    sessionId: string,
+    courseId: string,
+    options: RequestOptions = {},
+  ): Promise<StudySummaryReadResponse> {
+    const path = "/v1/study-sessions/{session_id}/summary";
+    assertAgentIdentifier(sessionId, path);
+    assertAgentIdentifier(courseId, path);
+    const params = new URLSearchParams({ course_id: courseId });
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/summary?${params.toString()}`,
+      studySummaryReadResponseSchema,
+      options,
+      { expectedStatuses: [200], validate: (_status, result) => result.course_id === courseId && result.session.id === sessionId },
+    );
+  }
+
+  finalizeStudySessionSummary(
+    sessionId: string,
+    request: StudySummaryRequest,
+    options: RequestOptions = {},
+  ): Promise<StudySummaryFinalizeResponse> {
+    const path = "/v1/study-sessions/{session_id}/summary";
+    assertAgentIdentifier(sessionId, path);
+    const parsed = studySummaryRequestSchema.safeParse(request);
+    if (!parsed.success) throw new LearningCoreRequestError(path);
+    return this.#request(
+      `/v1/study-sessions/${encodeURIComponent(sessionId)}/summary`,
+      studySummaryFinalizeResponseSchema,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+        signal: options.signal,
+      },
+      {
+        expectedStatuses: [200, 201],
+        validate: (status, result) => (
+          (status === 201) === (result.outcome === "applied")
+          && result.course_id === parsed.data.course_id
+          && result.session.id === sessionId
+          && result.session.status === "completed"
         ),
       },
     );

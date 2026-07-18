@@ -736,3 +736,54 @@ class TargetedPracticeReadResponse(ApiModel):
     current_unit: ActiveRecallPlanUnitResponse | None = None
     run: TargetedPracticeRunResponse | None = None
     grade: ActiveRecallGradeResponse | None = None
+
+
+class StudySummaryCompleteRequest(ActiveRecallProgressionRequest):
+    """Explicit local completion of the deterministic recap and review handoff."""
+
+
+class StudySummarySessionResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    course_id: str = Field(min_length=1, max_length=128)
+    status: Literal[
+        "summarizing", "review_scheduling", "paused", "completed", "cancelled", "failed"
+    ]
+    revision: int = Field(ge=0)
+    progress: float = Field(ge=0, le=1, allow_inf_nan=False)
+    estimated_minutes: int = Field(ge=1, le=1_440)
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class StudySummaryMetricsResponse(ApiModel):
+    active_recall_correct: bool
+    practice_correct: bool
+    practice_score: float = Field(ge=0, le=1, allow_inf_nan=False)
+    practice_max_score: float = Field(gt=0, le=1, allow_inf_nan=False)
+    task_completed: bool
+    remaining_units: int = Field(ge=0, le=7)
+
+
+class StudySummaryReviewResponse(ApiModel):
+    due_at: datetime
+    scheduler: Literal["fsrs"]
+    scheduler_version: str = Field(min_length=1, max_length=128)
+    state: Literal["new"]
+
+
+class StudySummaryReadResponse(ApiModel):
+    outcome: Literal["ready", "completed", "cancelled"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: StudySummarySessionResponse
+    summary: StudySummaryMetricsResponse | None = None
+    review: StudySummaryReviewResponse | None = None
+
+
+class StudySummaryProgressionResponse(ApiModel):
+    outcome: Literal["applied", "replayed"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: StudySummarySessionResponse
+    summary: StudySummaryMetricsResponse
+    review: StudySummaryReviewResponse

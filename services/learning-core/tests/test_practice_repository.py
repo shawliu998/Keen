@@ -26,7 +26,7 @@ def test_025_upgrades_a_real_024_database_without_reapplying_history(tmp_path):
             )
         connection.commit()
 
-    assert database.migrate() == [25]
+    assert database.migrate() == [25, 26]
     with database.connection() as connection:
         assert (
             connection.execute(

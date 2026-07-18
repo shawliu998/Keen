@@ -285,7 +285,7 @@ def test_024_upgrades_22_and_23_databases_and_retains_database_health(tmp_path) 
                 )
             connection.commit()
 
-        assert database.migrate() == list(range(version + 1, 26))
+        assert database.migrate() == list(range(version + 1, 27))
         assert database.migrate() == []
         with database.connection() as connection:
             assert [row[0] for row in connection.execute("PRAGMA quick_check")] == [

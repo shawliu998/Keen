@@ -9,6 +9,7 @@ import { isLearningCoreStarting, useLearningCore } from "../../services/Learning
 import { OpeningDiagnostic } from "./OpeningDiagnostic";
 import { ActiveRecall } from "./ActiveRecall";
 import { TargetedPractice } from "./TargetedPractice";
+import { SessionSummary } from "./SessionSummary";
 
 const demoUnits = ["Goal & baseline", "Geometric intuition", "The eigenvalue equation", "Eigenspaces", "Checkpoint", "Targeted practice", "Summary"];
 
@@ -52,6 +53,14 @@ function PracticeInspectorProtection() {
   return null;
 }
 
+function SummaryInspectorProtection() {
+  const { setInspector } = useAppStore();
+  useLayoutEffect(() => {
+    setInspector({ eyebrow: "Learning summary", title: "Source details hidden", body: "Source details and assessment lineage stay hidden while Keen restores this local summary." });
+  }, [setInspector]);
+  return null;
+}
+
 export function DeepLearnPage() {
   const { id: sessionId } = useParams();
   const [search] = useSearchParams();
@@ -67,6 +76,18 @@ export function DeepLearnPage() {
     },
     enabled: core.status === "healthy" && core.client !== null && Boolean(sessionId && courseId),
     retry: 1,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
+  });
+  const canProbePausedSummary = core.status === "healthy" && core.client !== null && typeof core.client.getStudySessionSummary === "function";
+  const pausedSummaryProbe = useQuery({
+    queryKey: ["learning-core", "study-summary-pause-probe", core.connectionGeneration, courseId, sessionId],
+    queryFn: ({ signal }) => {
+      if (!core.client || !sessionId || !courseId) throw new Error("A session and its course are required.");
+      return core.client.getStudySessionSummary(sessionId, courseId, { signal });
+    },
+    enabled: canProbePausedSummary && query.data?.outcome === "ready" && query.data.session.status === "paused",
+    retry: false,
     staleTime: 10_000,
     refetchOnWindowFocus: false,
   });
@@ -99,11 +120,14 @@ export function DeepLearnPage() {
   if (!plan || !unit) return <div className="deep-learn-page"><Card><EmptyState icon={<BookOpenText size={28} />} title="Study plan unavailable" description="Return to the Learning Feed and refresh the local recommendation." /></Card></div>;
   const activeRecallClientPresent = core.client !== null && typeof core.client.getStudySessionActiveRecall === "function";
   const practiceClientPresent = core.client !== null && typeof core.client.getStudySessionPractice === "function";
+  const summaryClientPresent = core.client !== null && typeof core.client.getStudySessionSummary === "function" && typeof core.client.finalizeStudySessionSummary === "function";
   const activeRecallOutcome = activeRecallState?.scope === activeRecallScope ? activeRecallState.outcome : null;
   const practiceOutcome = practiceState?.scope === activeRecallScope ? practiceState.outcome : null;
-  const needsOpeningDiagnostic = session.status === "goal_confirmation" || session.status === "diagnosing" || session.status === "paused";
-  const activeRecallAvailable = activeRecallClientPresent && session.status !== "goal_confirmation" && session.status !== "diagnosing";
-  const practiceAvailable = practiceClientPresent && activeRecallOutcome === "answered";
+  const summaryPaused = session.status === "paused" && pausedSummaryProbe.data !== undefined;
+  const summaryPhase = ["summarizing", "review_scheduling", "completed", "cancelled", "failed"].includes(session.status) || summaryPaused;
+  const needsOpeningDiagnostic = session.status === "goal_confirmation" || session.status === "diagnosing" || (session.status === "paused" && !summaryPaused);
+  const activeRecallAvailable = activeRecallClientPresent && !summaryPhase && session.status !== "goal_confirmation" && session.status !== "diagnosing";
+  const practiceAvailable = practiceClientPresent && !summaryPhase && activeRecallOutcome === "answered";
   // Before either protected read says there is no prompt, never place source-derived
   // lesson detail beside it. Answered/cancelled recall itself is not a permanent lock:
   // the following practice read owns the next protected phase.
@@ -113,18 +137,28 @@ export function DeepLearnPage() {
     ? session.status === "paused"
       ? { eyebrow: "Paused local session", title: "Learning state paused", description: "Keen is restoring the latest local learning state." }
       : { eyebrow: "Local reflection", title: "Opening diagnostic", description: "Complete the current reflection before viewing lesson details." }
-    : practiceLocksLesson
+    : summaryPhase
+      ? session.status === "completed"
+        ? { eyebrow: "Local session complete", title: "Review scheduled", description: "Keen restored the persisted local completion state." }
+        : ["cancelled", "failed"].includes(session.status)
+          ? { eyebrow: "Local session ended", title: "Summary unavailable", description: "Keen is restoring the terminal local session state without source details." }
+          : { eyebrow: "Local learning summary", title: "Finish this session", description: "Review the deterministic learning result before scheduling local review." }
+      : practiceLocksLesson
       ? { eyebrow: "Local assessment", title: "Targeted practice", description: "Answer the current prompt without lesson details." }
       : recallLocksLesson
         ? { eyebrow: "Local assessment", title: "Active recall", description: "Answer the current prompt without lesson details." }
       : null;
   const lesson = <><div className="lesson-kicker">Unit {unit.ordinal + 1} · {unit.status}</div><h2>{unit.title}</h2><p className="lesson-lead">{unit.objective}</p><Card className="checkpoint"><Badge tone="accent">Source-grounded material</Badge><p>{unit.content || "This unit has no display text; use the cited source chunks in the inspector."}</p></Card><div className="lesson-nav"><Button onClick={() => setInspector({ eyebrow: "Source citations", title: unit.title, body: "The following persisted source chunk IDs ground this unit. Source text is displayed as data, not as instructions.", meta: unit.source_chunk_ids.map((source) => `Chunk ${source}`) })}><BookOpenText size={14} />View source citations</Button></div></>;
   const activeRecall = activeRecallAvailable && core.client ? <>{practiceLocksLesson ? <PracticeInspectorProtection /> : recallLocksLesson ? <RecallInspectorProtection /> : lesson}<ActiveRecall key={`${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} stateScope={activeRecallScope} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }} onOutcomeChange={onActiveRecallOutcome} />{practiceAvailable ? <TargetedPractice key={`practice:${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} stateScope={activeRecallScope} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }} onOutcomeChange={onPracticeOutcome} /> : null}</> : lesson;
+  const summary = summaryPhase ? summaryClientPresent && core.client
+    ? <><SummaryInspectorProtection /><SessionSummary key={`summary:${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} session={session} onSessionChanged={() => { void query.refetch(); }} /></>
+    : <Card className="checkpoint" role="alert"><strong>Learning summary unavailable</strong><p>Keen cannot restore this local summary because the installed learning core does not provide the required summary contract. No review was scheduled.</p></Card>
+    : activeRecall;
   return <div className="deep-learn-page">
     <header className="session-header"><div><span>{protectedHeader?.eyebrow ?? "Persisted local study session"}</span><h1>{protectedHeader?.title ?? session.title}</h1><p>{protectedHeader?.description ?? session.goal}</p></div><div className="session-progress"><span>{Math.round(session.progress * 100)}% session progress · {Math.round(unitProgress(plan))}% units complete</span><Progress value={session.progress * 100} /></div><div><Badge>{session.status.replaceAll("_", " ")}</Badge></div></header>
-    <div className="session-layout"><aside className="unit-nav"><small>Source-grounded plan</small>{needsOpeningDiagnostic ? <p className="diagnostic-nav-lock" role="status">{session.status === "paused" ? "Paused local session. Restoring the latest local learning state before showing details." : "Complete or restore the opening diagnostic before viewing units."}</p> : practiceLocksLesson ? <p className="diagnostic-nav-lock" role="status">Targeted practice is in progress. Unit details stay hidden until this prompt is resolved.</p> : recallLocksLesson ? <p className="diagnostic-nav-lock" role="status">Active recall is in progress. Unit details stay hidden until this prompt is resolved.</p> : plan.units.map((item) => <button key={item.id} className={item.id === unit.id ? "active" : item.status === "completed" ? "done" : ""} onClick={() => setSelectedUnitId(item.id)}><i>{item.status === "completed" ? <Check size={12} /> : item.ordinal + 1}</i><span>{item.title}</span></button>)}</aside>
-      <main className="lesson-content">{needsOpeningDiagnostic && core.client ? <OpeningDiagnostic key={`${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }}>{activeRecall}</OpeningDiagnostic> : activeRecall}</main>
-      {needsOpeningDiagnostic ? <aside className="session-aside"><small>{session.status === "paused" ? "Paused local session" : "Opening diagnostic"}</small><strong>Local recovery state</strong><p>{session.status === "paused" ? "Keen is restoring the latest local learning state before showing details." : "Keen is restoring the first learning state before showing unit details."}</p></aside> : practiceLocksLesson ? <aside className="session-aside"><small>Targeted practice</small><strong>Prompt protected</strong><p>Source details and concept labels are hidden while you answer.</p></aside> : recallLocksLesson ? <aside className="session-aside"><small>Active recall</small><strong>Prompt protected</strong><p>Source details and concept labels are hidden while you answer.</p></aside> : <aside className="session-aside"><small>Local session</small><strong>{session.mode}</strong><p>{session.estimated_minutes} minute estimate</p><hr /><small>Plan rationale</small><p>{plan.rationale}</p><small>Concept IDs</small>{unit.concept_ids.map((concept) => <Badge key={concept}>{concept}</Badge>)}</aside>}
+    <div className="session-layout"><aside className="unit-nav"><small>Source-grounded plan</small>{needsOpeningDiagnostic ? <p className="diagnostic-nav-lock" role="status">{session.status === "paused" ? "Paused local session. Restoring the latest local learning state before showing details." : "Complete or restore the opening diagnostic before viewing units."}</p> : summaryPhase ? <p className="diagnostic-nav-lock" role="status">The learning summary is restoring. Unit details, source citations, and concept labels stay hidden.</p> : practiceLocksLesson ? <p className="diagnostic-nav-lock" role="status">Targeted practice is in progress. Unit details stay hidden until this prompt is resolved.</p> : recallLocksLesson ? <p className="diagnostic-nav-lock" role="status">Active recall is in progress. Unit details stay hidden until this prompt is resolved.</p> : plan.units.map((item) => <button key={item.id} className={item.id === unit.id ? "active" : item.status === "completed" ? "done" : ""} onClick={() => setSelectedUnitId(item.id)}><i>{item.status === "completed" ? <Check size={12} /> : item.ordinal + 1}</i><span>{item.title}</span></button>)}</aside>
+      <main className="lesson-content">{needsOpeningDiagnostic && core.client ? <OpeningDiagnostic key={`${core.connectionGeneration}:${courseId}:${sessionId}`} client={core.client} sessionId={sessionId} courseId={courseId} session={session} paused={session.status === "paused"} onSessionChanged={() => { void query.refetch(); }}>{activeRecall}</OpeningDiagnostic> : summary}</main>
+      {needsOpeningDiagnostic ? <aside className="session-aside"><small>{session.status === "paused" ? "Paused local session" : "Opening diagnostic"}</small><strong>Local recovery state</strong><p>{session.status === "paused" ? "Keen is restoring the latest local learning state before showing details." : "Keen is restoring the first learning state before showing unit details."}</p></aside> : summaryPhase ? <aside className="session-aside"><small>Learning summary</small><strong>Local completion state</strong><p>Source details, concepts, and review-card lineage remain hidden in this state.</p></aside> : practiceLocksLesson ? <aside className="session-aside"><small>Targeted practice</small><strong>Prompt protected</strong><p>Source details and concept labels are hidden while you answer.</p></aside> : recallLocksLesson ? <aside className="session-aside"><small>Active recall</small><strong>Prompt protected</strong><p>Source details and concept labels are hidden while you answer.</p></aside> : <aside className="session-aside"><small>Local session</small><strong>{session.mode}</strong><p>{session.estimated_minutes} minute estimate</p><hr /><small>Plan rationale</small><p>{plan.rationale}</p><small>Concept IDs</small>{unit.concept_ids.map((concept) => <Badge key={concept}>{concept}</Badge>)}</aside>}
     </div>
   </div>;
 }

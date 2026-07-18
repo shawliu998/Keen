@@ -37,6 +37,12 @@ from ..schemas import (
     TargetedPracticeProgressionResponse,
     TargetedPracticeReadResponse,
     TargetedPracticeRunResponse,
+    StudySummaryCompleteRequest,
+    StudySummaryMetricsResponse,
+    StudySummaryProgressionResponse,
+    StudySummaryReadResponse,
+    StudySummaryReviewResponse,
+    StudySummarySessionResponse,
 )
 from ..services.diagnostic_progression import (
     DiagnosticConflictError,
@@ -58,6 +64,13 @@ from ..services.targeted_practice_progression import (
     TargetedPracticeProgressionResult,
     TargetedPracticeProgressionService,
     TargetedPracticeReadResult,
+)
+from ..services.study_summary_review import (
+    StudySummaryConflictError,
+    StudySummaryNotFoundError,
+    StudySummaryReadResult,
+    StudySummaryResult,
+    StudySummaryReviewService,
 )
 from ..services.autonomous_study_session import (
     AutonomousStudySessionResult,
@@ -1144,6 +1157,92 @@ def _practice_progression_response(
     )
 
 
+def _summary_session(value: dict[str, Any]) -> StudySummarySessionResponse:
+    """Summary responses intentionally do not disclose the internal unit pointer."""
+
+    return StudySummarySessionResponse.model_validate(
+        {
+            "id": value["id"],
+            "course_id": value["course_id"],
+            "status": value["status"],
+            "revision": value["revision"],
+            "progress": value["progress"],
+            "estimated_minutes": value["estimated_minutes"],
+            "created_at": _stored_utc_datetime(value["created_at"]),
+            "updated_at": _stored_utc_datetime(value["updated_at"]),
+            "started_at": _stored_utc_datetime(value.get("started_at"), optional=True),
+            "finished_at": _stored_utc_datetime(
+                value.get("finished_at"), optional=True
+            ),
+        }
+    )
+
+
+def _summary_metrics(
+    value: dict[str, Any] | None,
+) -> StudySummaryMetricsResponse | None:
+    if value is None:
+        return None
+    return StudySummaryMetricsResponse.model_validate(value)
+
+
+def _summary_review(value: dict[str, Any] | None) -> StudySummaryReviewResponse | None:
+    if value is None:
+        return None
+    return StudySummaryReviewResponse.model_validate(
+        {**value, "due_at": _stored_utc_datetime(value["due_at"])}
+    )
+
+
+def _summary_read_response(
+    result: StudySummaryReadResult, *, expected_course_id: str, expected_session_id: str
+) -> StudySummaryReadResponse:
+    if result.course_id != expected_course_id:
+        raise ValueError("study summary is outside requested course")
+    session = _summary_session(result.session)
+    summary, review = _summary_metrics(result.summary), _summary_review(result.review)
+    if session.id != expected_session_id or session.course_id != expected_course_id:
+        raise ValueError("study summary session relationship is invalid")
+    if result.outcome == "ready" and (summary is None or review is not None):
+        raise ValueError("ready study summary is inconsistent")
+    if result.outcome == "completed" and (summary is None or review is None):
+        raise ValueError("completed study summary is inconsistent")
+    if result.outcome == "cancelled" and (summary is not None or review is not None):
+        raise ValueError("cancelled study summary is inconsistent")
+    return StudySummaryReadResponse(
+        outcome=result.outcome,
+        course_id=result.course_id,
+        session=session,
+        summary=summary,
+        review=review,
+    )
+
+
+def _summary_progression_response(
+    result: StudySummaryResult, *, expected_course_id: str, expected_session_id: str
+) -> StudySummaryProgressionResponse:
+    if result.course_id != expected_course_id:
+        raise ValueError("study summary is outside requested course")
+    session = _summary_session(result.session)
+    summary, review = _summary_metrics(result.summary), _summary_review(result.review)
+    if session.id != expected_session_id or session.course_id != expected_course_id:
+        raise ValueError("study summary session relationship is invalid")
+    if (
+        summary is None
+        or review is None
+        or session.status != "completed"
+        or session.progress != 1
+    ):
+        raise ValueError("study summary completion is inconsistent")
+    return StudySummaryProgressionResponse(
+        outcome=result.outcome,
+        course_id=result.course_id,
+        session=session,
+        summary=summary,
+        review=review,
+    )
+
+
 @router.get(
     "/study-sessions/{session_id}",
     response_model=StudySessionReadResponse,
@@ -1513,6 +1612,70 @@ def answer_study_practice(
         raise _practice_conflict() from None
     except (sqlite3.Error, RuntimeError, ValueError, LookupError, KeyError, TypeError):
         raise _practice_write_service_error() from None
+
+
+@router.get(
+    "/study-sessions/{session_id}/summary",
+    response_model=StudySummaryReadResponse,
+)
+def get_study_summary(
+    request: Request,
+    session_id: str = Path(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    ),
+    course_id: str = Query(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    ),
+) -> StudySummaryReadResponse:
+    try:
+        with request.app.state.database.connection() as connection:
+            result = StudySummaryReviewService(connection).get(
+                course_id=course_id, session_id=session_id
+            )
+        return _summary_read_response(
+            result, expected_course_id=course_id, expected_session_id=session_id
+        )
+    except StudySummaryNotFoundError:
+        raise _practice_not_found() from None
+    except StudySummaryConflictError:
+        raise _practice_conflict() from None
+    except (sqlite3.Error, RuntimeError, ValueError, LookupError, KeyError, TypeError):
+        raise _practice_read_service_error() from None
+
+
+@router.post(
+    "/study-sessions/{session_id}/summary",
+    response_model=StudySummaryProgressionResponse,
+)
+def complete_study_summary(
+    payload: StudySummaryCompleteRequest,
+    request: Request,
+    response: Response,
+    session_id: str = Path(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    ),
+) -> StudySummaryProgressionResponse:
+    try:
+        with request.app.state.database.connection() as connection:
+            result = StudySummaryReviewService(connection).complete(
+                course_id=payload.course_id,
+                session_id=session_id,
+                expected_revision=payload.expected_revision,
+                idempotency_key=payload.idempotency_key,
+                now=datetime.now(UTC),
+            )
+        body = _summary_progression_response(
+            result, expected_course_id=payload.course_id, expected_session_id=session_id
+        )
+    except StudySummaryNotFoundError:
+        raise _practice_not_found() from None
+    except StudySummaryConflictError:
+        raise _practice_conflict() from None
+    except (sqlite3.Error, RuntimeError, ValueError, LookupError, KeyError, TypeError):
+        raise _practice_write_service_error() from None
+    if body.outcome == "applied":
+        response.status_code = 201
+    return body
 
 
 @router.post(
