@@ -14,6 +14,7 @@ class ResponseType(StrEnum):
     OBJECTIVE = "objective"
     SUBJECTIVE = "subjective"
     ACTIVE_RECALL = "active_recall"
+    PRACTICE = "practice"
     DIAGNOSTIC = "diagnostic"
     REVIEW = "review"
     CONTENT_READ = "content_read"
@@ -31,6 +32,7 @@ class MasteryEvidenceParameters:
         (ResponseType.OBJECTIVE, 0.85),
         (ResponseType.SUBJECTIVE, 0.80),
         (ResponseType.ACTIVE_RECALL, 0.90),
+        (ResponseType.PRACTICE, 0.85),
         (ResponseType.DIAGNOSTIC, 0.50),
         (ResponseType.REVIEW, 0.85),
         (ResponseType.CONTENT_READ, 0.05),

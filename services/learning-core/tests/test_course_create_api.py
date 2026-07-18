@@ -114,7 +114,7 @@ def test_course_create_scans_legacy_titles_without_rewriting_duplicate_legacy_ro
         )
         connection.commit()
 
-    assert database.migrate() == [21, 22, 23, 24]
+    assert database.migrate() == [21, 22, 23, 24, 25]
     with database.connection() as connection:
         study_session_columns = {
             row["name"]

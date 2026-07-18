@@ -46,7 +46,7 @@ class StudySessionReadService:
             SELECT id, course_id, originating_task_id, title, mode, goal,
                    estimated_minutes, status, resume_from_status, progress,
                    revision, current_unit_id,
-                   created_at, updated_at, started_at
+                   created_at, updated_at, started_at, finished_at
             FROM study_sessions
             WHERE id = ? AND course_id = ?
             """,

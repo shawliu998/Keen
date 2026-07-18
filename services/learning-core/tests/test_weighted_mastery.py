@@ -75,6 +75,16 @@ def test_user_report_is_auditable_zero_weight_and_does_not_change_mastery():
     assert result.after == result.before == 0.42
 
 
+def test_targeted_practice_has_an_explicit_positive_evidence_factor():
+    practice = calculate_evidence_weight(_evidence(response_type=ResponseType.PRACTICE))
+    objective = calculate_evidence_weight(
+        _evidence(response_type=ResponseType.OBJECTIVE)
+    )
+
+    assert practice == objective
+    assert practice > 0.0
+
+
 def test_string_response_type_is_normalized_and_unknown_type_is_rejected():
     evidence = _evidence(response_type="objective")
     assert evidence.response_type is ResponseType.OBJECTIVE

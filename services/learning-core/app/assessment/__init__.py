@@ -11,6 +11,11 @@ from app.assessment.source_cloze import (
     SourceClozeItem,
     generate_source_cloze,
 )
+from app.assessment.targeted_practice import (
+    TARGETED_PRACTICE_GENERATOR_VERSION,
+    TargetedPracticeItem,
+    generate_targeted_practice,
+)
 
 __all__ = [
     "FillBlankNormalization",
@@ -20,4 +25,7 @@ __all__ = [
     "SourceClozeItem",
     "SOURCE_CLOZE_GENERATOR_VERSION",
     "generate_source_cloze",
+    "TARGETED_PRACTICE_GENERATOR_VERSION",
+    "TargetedPracticeItem",
+    "generate_targeted_practice",
 ]

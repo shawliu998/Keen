@@ -679,3 +679,60 @@ class ActiveRecallReadResponse(ApiModel):
     current_unit: ActiveRecallPlanUnitResponse | None = None
     run: ActiveRecallRunResponse | None = None
     grade: ActiveRecallGradeResponse | None = None
+
+
+class TargetedPracticeProgressionRequest(ActiveRecallProgressionRequest):
+    """Strict, idempotent command for the post-recall practice step."""
+
+
+class TargetedPracticeAnswerRequest(TargetedPracticeProgressionRequest):
+    response: str = Field(min_length=1, max_length=8_000, strict=True)
+
+    @field_validator("response")
+    @classmethod
+    def response_has_visible_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("response must contain non-whitespace characters")
+        return value
+
+
+class TargetedPracticeCheckpointResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    kind: Literal["practice"]
+    prompt: str = Field(min_length=1, max_length=1_400)
+    status: Literal["pending", "answered", "skipped"]
+    created_at: datetime
+    answered_at: datetime | None = None
+
+
+class TargetedPracticeRunResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=128)
+    status: Literal["pending", "answered", "cancelled"]
+    checkpoint_id: str = Field(min_length=1, max_length=128)
+    generator_version: str = Field(min_length=1, max_length=128)
+    created_at: datetime
+    answered_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancellation_reason: Literal["session_cancelled", "session_failed"] | None = None
+
+
+class TargetedPracticeProgressionResponse(ApiModel):
+    outcome: Literal["applied", "replayed"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: ActiveRecallSessionResponse
+    plan: ActiveRecallPlanResponse
+    checkpoint: TargetedPracticeCheckpointResponse
+    current_unit: ActiveRecallPlanUnitResponse | None = None
+    run: TargetedPracticeRunResponse
+    grade: ActiveRecallGradeResponse | None = None
+
+
+class TargetedPracticeReadResponse(ApiModel):
+    outcome: Literal["not_started", "pending", "answered", "cancelled"]
+    course_id: str = Field(min_length=1, max_length=128)
+    session: ActiveRecallSessionResponse
+    plan: ActiveRecallPlanResponse
+    checkpoint: TargetedPracticeCheckpointResponse | None = None
+    current_unit: ActiveRecallPlanUnitResponse | None = None
+    run: TargetedPracticeRunResponse | None = None
+    grade: ActiveRecallGradeResponse | None = None
