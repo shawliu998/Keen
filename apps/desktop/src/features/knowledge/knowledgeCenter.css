@@ -1,0 +1,283 @@
+/*
+ * Knowledge Center is a Keen-owned interpretation of the collection and
+ * selected-file hierarchy studied from DeepTutor. It deliberately renders
+ * only Keen course/source/index state; no upstream branding, provider cards,
+ * or simulated retrieval capabilities are carried into this feature.
+ */
+
+.knowledge-center {
+  max-width: 1180px;
+}
+
+.knowledge-center > .page-header {
+  min-height: 92px;
+  align-items: flex-start;
+  margin-bottom: 28px;
+  padding: 4px 2px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.knowledge-center > .page-header h1 {
+  font-size: clamp(24px, 2vw, 30px);
+  font-weight: 680;
+  letter-spacing: -.035em;
+}
+
+.knowledge-center > .page-header p {
+  max-width: 62ch;
+  margin-top: 7px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.knowledge-center > .page-header .page-actions {
+  padding-top: 3px;
+}
+
+.knowledge-center > .page-header .page-actions .ui-button.primary {
+  min-height: 38px;
+  padding-inline: 15px;
+  border-radius: 9px;
+}
+
+.knowledge-center .knowledge-course-library {
+  margin: 0 0 30px;
+}
+
+.knowledge-center .knowledge-course-library-heading {
+  min-height: auto;
+  align-items: center;
+  margin-bottom: 13px;
+}
+
+.knowledge-center .knowledge-course-library-heading h2,
+.knowledge-center .knowledge-library-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+
+.knowledge-center .knowledge-course-library-heading h2::before,
+.knowledge-center .knowledge-library-heading h2::before {
+  width: 15px;
+  height: 15px;
+  content: "";
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+  opacity: .72;
+}
+
+.knowledge-center .knowledge-course-library-heading p {
+  margin-top: 5px;
+  font-size: 12px;
+}
+
+.knowledge-center .knowledge-course-library-heading > .badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--surface-secondary);
+  font-size: 11px;
+}
+
+.knowledge-center .knowledge-course-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.knowledge-center .knowledge-course-card {
+  min-height: 124px;
+  gap: 18px;
+  padding: 16px 17px 15px;
+  border-color: var(--border-subtle);
+  border-radius: 15px;
+  box-shadow: 0 1px 1px rgb(20 28 45 / .02);
+}
+
+.knowledge-center .knowledge-course-card:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-strong));
+  background: var(--surface-primary);
+  box-shadow: 0 8px 20px rgb(31 42 65 / .05);
+}
+
+.knowledge-center .knowledge-course-card.is-selected {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-soft) 56%, var(--surface-primary));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+.knowledge-center .knowledge-course-card-top {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.knowledge-center .knowledge-course-card-top > svg {
+  width: 19px;
+  height: 19px;
+  color: var(--accent-primary);
+  stroke-width: 1.7;
+}
+
+.knowledge-center .knowledge-course-card-top strong {
+  font-size: 14px;
+  font-weight: 670;
+}
+
+.knowledge-center .knowledge-course-card-top .badge {
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.knowledge-center .knowledge-course-card-meta {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-center .knowledge-course-settings {
+  margin: -8px 0 32px;
+  border-color: var(--border-subtle);
+}
+
+.knowledge-center .knowledge-course-settings > summary {
+  min-height: 54px;
+  padding-inline: 4px;
+}
+
+.knowledge-center .knowledge-library-heading {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.knowledge-center .knowledge-library-heading > span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.knowledge-center .library-tools {
+  grid-template-columns: minmax(260px, 1fr) minmax(210px, .38fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.knowledge-center .library-tools .search-box,
+.knowledge-center .library-tools .select-control {
+  min-height: 40px;
+  border-color: var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-primary);
+}
+
+.knowledge-center .document-table {
+  border-color: var(--border-subtle);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgb(20 28 45 / .025);
+}
+
+.knowledge-center .document-head {
+  min-height: 40px;
+  background: var(--surface-secondary);
+}
+
+.knowledge-center .document-row {
+  min-height: 72px;
+  padding-inline: 16px;
+}
+
+.knowledge-center .knowledge-source-workspace {
+  min-height: min(720px, calc(100vh - 208px));
+  grid-template-columns: 270px minmax(0, 1fr);
+  border-color: var(--border-subtle);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgb(20 28 45 / .035);
+}
+
+.knowledge-center .knowledge-source-rail {
+  background: var(--surface-primary);
+}
+
+.knowledge-center .knowledge-source-rail > header,
+.knowledge-center .knowledge-source-header {
+  min-height: 64px;
+  padding-inline: 18px;
+  background: var(--surface-primary);
+}
+
+.knowledge-center .knowledge-source-rail > header strong,
+.knowledge-center .knowledge-source-title strong {
+  font-weight: 670;
+}
+
+.knowledge-center .knowledge-source-rail-list {
+  gap: 4px;
+  padding: 10px;
+}
+
+.knowledge-center .knowledge-source-rail-list > button {
+  min-height: 64px;
+  padding: 11px;
+  border-radius: 10px;
+}
+
+.knowledge-center .knowledge-source-rail-list > button.is-selected {
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface-primary));
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.knowledge-center .knowledge-source-header {
+  min-height: 68px;
+}
+
+.knowledge-center .knowledge-preview-stage {
+  min-height: 500px;
+  padding: 28px;
+  background: #292b2f;
+}
+
+.knowledge-center .knowledge-source-details {
+  background: var(--surface-primary);
+}
+
+@media (max-width: 860px) {
+  .knowledge-center > .page-header {
+    min-height: auto;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .knowledge-center .knowledge-course-grid,
+  .knowledge-center .library-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-center .knowledge-source-workspace {
+    min-height: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-center .knowledge-source-rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .knowledge-center .knowledge-source-rail-list {
+    max-height: 210px;
+    overflow: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .knowledge-center > .page-header h1 { font-size: 24px; }
+  .knowledge-center .knowledge-course-card { min-height: 108px; padding: 14px; }
+  .knowledge-center .document-row { min-height: 64px; padding-inline: 12px; }
+  .knowledge-center .knowledge-preview-stage { padding: 16px; }
+}

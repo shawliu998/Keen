@@ -1,27 +1,85 @@
-import { useState } from "react";
-import { Check, Code2, Download, Image, LoaderCircle, Play, Sparkles } from "lucide-react";
-import { Badge, Button, Card, Progress } from "@keen/ui";
-import { Page, Segmented } from "../../components/Page";
+import { Badge } from "@keen/ui";
+import { CircleCheck, CircleMinus, FileText } from "lucide-react";
+import { Page } from "../../components/Page";
 
-type Format = "Diagram" | "SVG" | "Animation";
-type Job = "idle" | "generating" | "ready";
+const unavailable = ["Course-source grounding", "Generated diagrams or animation", "Export and narration"];
 
 export function VisualizePage() {
-  const [format, setFormat] = useState<Format>("Diagram");
-  const [prompt, setPrompt] = useState("Show how a matrix transforms space while an eigenvector keeps its direction");
-  const [job, setJob] = useState<Job>("idle");
-  const [progress, setProgress] = useState(0);
-  const generate = () => {
-    if (!prompt.trim() || job === "generating") return;
-    setJob("generating"); setProgress(18);
-    window.setTimeout(() => setProgress(58), 300);
-    window.setTimeout(() => { setProgress(100); setJob("ready"); }, 800);
-  };
   return (
-    <Page title="Visualize" description="Preview the visualization workflow using a bundled local example." actions={<Badge tone="warning">Demo renderer · no source grounding</Badge>}>
-      <div className="visualize-layout"><Card className="visual-builder"><div className="field"><label>What should the visual explain?</label><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} /></div><div className="field"><label>Output format</label><Segmented value={format} options={["Diagram","SVG","Animation"]} onChange={setFormat} /></div><div className="field"><label>Knowledge context</label><select disabled><option>Unavailable until document indexing is connected</option></select></div><div className="visual-options"><label><input type="checkbox" defaultChecked /> Include labels</label><label><input type="checkbox" disabled /> Cite source concepts (unavailable)</label><label><input type="checkbox" disabled /> Show narration script (unavailable)</label></div><Button className="primary" onClick={generate} disabled={job === "generating"}>{job === "generating" ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{job === "generating" ? "Loading demo…" : "Load demo preview"}</Button>{job === "generating" && <div className="job-progress"><Progress value={progress} /><span>Rendering bundled SVG preview</span></div>}</Card>
-        <Card className="visual-preview">{job === "idle" ? <div className="preview-empty"><Image size={32} /><h3>Your demo preview will appear here</h3><p>The generator and export pipeline are not connected in this build.</p></div> : job === "generating" ? <div className="preview-empty"><LoaderCircle className="spin" size={30} /><h3>Loading bundled visual</h3><p>No model, renderer, or source retrieval is running.</p></div> : <><div className="preview-head"><span><Check size={13} />Bundled deterministic demo</span><div><Button disabled><Code2 size={14} />Source unavailable</Button><Button disabled><Download size={14} />Export unavailable</Button></div></div><div className="matrix-diagram"><div className="diagram-plane before"><span className="grid-lines" /><i className="diagram-vector">v</i><small>Before</small></div><div className="transform-arrow"><code>A</code><span>→</span></div><div className="diagram-plane after"><span className="grid-lines transformed" /><i className="diagram-vector long">Av</i><small>After</small></div><div className="diagram-caption"><strong>Av = λv</strong><span>Direction preserved · magnitude scaled</span></div></div><div className="preview-footer"><Badge tone="warning">Demo SVG</Badge><span>Not source-grounded</span><Button disabled><Play size={13} />Motion unavailable</Button></div></>}</Card></div>
-      <Card className="future-renderer"><div><Code2 size={17} /><span><strong>Manim video renderer</strong><small>Script, narration, code, rendering, and final artifact pipeline</small></span></div><Badge>Not configured</Badge><Button>Set up renderer</Button></Card>
+    <Page
+      className="visualize-page"
+      title="Visual explanation"
+      description="A bundled teaching example for reviewing Keen’s visual language."
+      actions={<Badge>Bundled local example</Badge>}
+    >
+      <div className="visualize-disclosure" role="note">
+        <FileText size={15} aria-hidden="true" />
+        <span>This page uses fixed interface content. It does not read course files, call a model, or create an artifact.</span>
+      </div>
+
+      <div className="visualize-workspace">
+        <figure className="visual-example">
+          <div className="visual-example-header">
+            <div><span>Linear algebra</span><h2>Why an eigenvector keeps its direction</h2></div>
+            <Badge>Bundled SVG</Badge>
+          </div>
+          <svg className="eigenvector-diagram" viewBox="0 0 820 390" role="img" aria-labelledby="eigenvector-title eigenvector-description">
+            <title id="eigenvector-title">Eigenvector transformation diagram</title>
+            <desc id="eigenvector-description">Two coordinate planes show a vector before and after multiplication by matrix A. Its length changes while its direction stays the same.</desc>
+            <defs>
+              <pattern id="coordinate-grid" width="28" height="28" patternUnits="userSpaceOnUse" className="diagram-grid-pattern">
+                <path d="M 28 0 L 0 0 0 28" fill="none" stroke="currentColor" strokeWidth="1" />
+              </pattern>
+              <marker id="vector-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+              </marker>
+            </defs>
+
+            <g className="diagram-plane-group" transform="translate(42 42)">
+              <rect width="292" height="260" rx="8" className="diagram-surface" />
+              <rect width="292" height="260" rx="8" fill="url(#coordinate-grid)" className="diagram-grid" />
+              <path d="M146 18V242M18 130H274" className="diagram-axis" />
+              <path d="M146 130L229 82" className="diagram-vector-line" markerEnd="url(#vector-arrow)" />
+              <circle cx="146" cy="130" r="4" className="diagram-origin" />
+              <text x="236" y="78" className="diagram-vector-label">v</text>
+              <text x="16" y="286" className="diagram-state-label">Before transformation</text>
+            </g>
+
+            <g className="diagram-transform" transform="translate(383 146)">
+              <text x="26" y="0">A</text>
+              <path d="M0 30H68" markerEnd="url(#vector-arrow)" />
+            </g>
+
+            <g className="diagram-plane-group" transform="translate(486 42)">
+              <rect width="292" height="260" rx="8" className="diagram-surface" />
+              <g transform="skewX(-11) translate(25 0)">
+                <rect width="248" height="260" fill="url(#coordinate-grid)" className="diagram-grid" />
+                <path d="M124 18V242M0 130H248" className="diagram-axis" />
+              </g>
+              <path d="M146 130L256 66" className="diagram-vector-line" markerEnd="url(#vector-arrow)" />
+              <circle cx="146" cy="130" r="4" className="diagram-origin" />
+              <text x="260" y="61" className="diagram-vector-label">Av</text>
+              <text x="16" y="286" className="diagram-state-label">After transformation</text>
+            </g>
+          </svg>
+          <figcaption>
+            <strong>Av = λv</strong>
+            <span>The matrix scales the vector by λ. Its magnitude may change, but it remains on the same line.</span>
+          </figcaption>
+        </figure>
+
+        <aside className="visual-example-notes" aria-label="Example availability">
+          <div>
+            <span className="visual-notes-label">Available here</span>
+            <h2>A fixed, inspectable example</h2>
+            <p>The diagram and explanation ship with the interface so layout and readability can be reviewed without implying generation.</p>
+          </div>
+          <ul className="visual-availability-list">
+            <li><CircleCheck size={15} aria-hidden="true" /><span><strong>Local and offline</strong><small>No service connection is required.</small></span></li>
+            {unavailable.map((item) => <li className="is-unavailable" key={item}><CircleMinus size={15} aria-hidden="true" /><span><strong>{item}</strong><small>Not implemented in this build.</small></span></li>)}
+          </ul>
+        </aside>
+      </div>
     </Page>
   );
 }

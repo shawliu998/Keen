@@ -1,0 +1,11 @@
+Command:
+npm run build --workspace=@keen/desktop
+
+Result:
+PASS (exit 0)
+
+Summary:
+- Strict TypeScript build completed.
+- Vite transformed 1732 modules.
+- Production assets were emitted successfully.
+- Vite reported its existing advisory that some chunks exceed 500 kB; this is not a build failure and was not expanded into an unrelated optimization task.

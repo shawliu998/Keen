@@ -1,0 +1,11 @@
+Command:
+npm run build --workspace=@keen/desktop
+
+Result:
+PASS (exit 0)
+
+Summary:
+- Vite 6.4.3
+- 1,732 modules transformed
+- Built in 3.95 s
+- Existing advisory: one generated JavaScript chunk remains larger than 500 kB after minification.

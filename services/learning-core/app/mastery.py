@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +16,12 @@ class BktParameters:
             ("guess", self.guess),
             ("transit", self.transit),
         ):
-            if not 0.0 <= value <= 1.0:
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not isfinite(value)
+                or not 0.0 <= value <= 1.0
+            ):
                 raise ValueError(f"{name} must be between 0 and 1")
 
 
@@ -27,7 +33,12 @@ def update_bkt(
 ) -> float:
     """Return P(learned) after one observation and one learning transition."""
 
-    if not 0.0 <= prior <= 1.0:
+    if (
+        not isinstance(prior, (int, float))
+        or isinstance(prior, bool)
+        or not isfinite(prior)
+        or not 0.0 <= prior <= 1.0
+    ):
         raise ValueError("prior must be between 0 and 1")
 
     if correct:

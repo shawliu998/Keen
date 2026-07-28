@@ -9,6 +9,212 @@
       "viewport": { "width": 1440, "height": 920 },
       "thresholdPercent": 3,
       "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "home-agent-activity-empty",
+      "route": "/?demo=true&visualTest=true&visualAgentActivity=empty",
+      "reference": "../../references/visual-baselines/keen-home-agent-activity-empty.png",
+      "viewport": { "width": 980, "height": 900 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "learning-feed",
+      "route": "/feed?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-learning-feed.png",
+      "viewport": { "width": 1440, "height": 920 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "deep-learn-entry",
+      "route": "/?mode=study&demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-deep-learn-entry.png",
+      "viewport": { "width": 1440, "height": 920 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "deep-learn-summary",
+      "route": "/deep-learn/demo?course_id=demo&demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-deep-learn-summary.png",
+      "viewport": { "width": 1440, "height": 920 },
+      "thresholdPercent": 3,
+      "actions": [{ "role": "button", "name": "7 Summary" }],
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "settings-status",
+      "route": "/settings?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-settings-status.png",
+      "viewport": { "width": 1440, "height": 920 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "settings-capabilities",
+      "route": "/settings?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-settings-connections.png",
+      "viewport": { "width": 1440, "height": 920 },
+      "thresholdPercent": 3,
+      "actions": [{ "role": "button", "name": "Model" }],
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "deep-learn-summary-compact",
+      "route": "/deep-learn/demo?course_id=demo&demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-deep-learn-summary-compact.png",
+      "viewport": { "width": 1100, "height": 760 },
+      "thresholdPercent": 3,
+      "actions": [{ "role": "button", "name": "7 Summary" }],
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "settings-capabilities-compact",
+      "route": "/settings?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-settings-connections-compact.png",
+      "viewport": { "width": 1100, "height": 760 },
+      "thresholdPercent": 3,
+      "actions": [{ "role": "button", "name": "Model" }],
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "settings-status-compact",
+      "route": "/settings?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-settings-status-compact.png",
+      "viewport": { "width": 900, "height": 700 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "conversation",
+      "route": "/conversation/conversation-live?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-conversation.png",
+      "viewport": { "width": 1510, "height": 950 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "conversation-compact",
+      "route": "/conversation/conversation-live?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-conversation-compact.png",
+      "viewport": { "width": 900, "height": 700 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "visualize-demo",
+      "route": "/visualize?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-visualize-demo.png",
+      "viewport": { "width": 1280, "height": 800 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "planner-boundary",
+      "route": "/planner?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-planner-boundary.png",
+      "viewport": { "width": 1280, "height": 800 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "review-browser-boundary",
+      "route": "/review?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-review-browser-boundary.png",
+      "viewport": { "width": 1280, "height": 800 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "review-loading-compact",
+      "route": "/review?visualTest=true&visualCoreState=loading",
+      "reference": "../../references/visual-baselines/keen-review-loading-compact.png",
+      "viewport": { "width": 760, "height": 700 },
+      "thresholdPercent": 3,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "home-figma-compact",
+      "route": "/?demo=true&visualTest=true",
+      "reference": "../../references/keen/2026-07-21-figma-baseline/home-approved-155-187-1180x740.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "learning-feed-figma-compact",
+      "route": "/feed?demo=true&visualTest=true",
+      "reference": "../../references/keen/2026-07-21-figma-baseline/learning-feed-approved-164-179-1180x740.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "task-detail-figma-compact",
+      "route": "/feed?demo=true&visualTest=true&selectedTask=t2",
+      "reference": "../../references/keen/2026-07-20-figma-phase4/feed-selected-task-compact-final.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "deep-learn-figma-default",
+      "route": "/deep-learn/demo?course_id=demo&demo=true&visualTest=true",
+      "reference": "../../artifacts/figma/page-baselines/keen-deep-learn-live-capture-1585x950.png",
+      "viewport": { "width": 1585, "height": 950 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "feed-unavailable-figma-compact",
+      "route": "/feed?visualTest=true&visualCoreState=unavailable",
+      "reference": "../../references/keen/2026-07-20-figma-phase4/feed-state-unavailable-1180x740.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "feed-loading-figma-compact",
+      "route": "/feed?visualTest=true&visualCoreState=loading",
+      "reference": "../../references/keen/2026-07-20-figma-phase4/feed-state-loading-1180x740.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "feed-empty-figma-compact",
+      "route": "/feed?visualTest=true&visualCoreState=empty",
+      "reference": "../../references/keen/2026-07-20-figma-phase4/feed-state-empty-1180x740.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "feed-error-figma-compact",
+      "route": "/feed?visualTest=true&visualCoreState=error",
+      "reference": "../../references/keen/2026-07-20-figma-phase4/feed-state-error-1180x740.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "comparisonOnly": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "home-keen-baseline-compact",
+      "route": "/?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-home-browser-demo-1180x740-reduced-motion.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "thresholdPercent": 0,
+      "assertRequestFree": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
+    },
+    {
+      "name": "learning-feed-keen-baseline-compact",
+      "route": "/feed?demo=true&visualTest=true",
+      "reference": "../../references/visual-baselines/keen-learning-feed-browser-demo-1180x740-reduced-motion.png",
+      "viewport": { "width": 1180, "height": 740 },
+      "thresholdPercent": 0,
+      "assertRequestFree": true,
+      "ignoredSelectors": ["[data-visual-dynamic]"]
     }
   ]
 }

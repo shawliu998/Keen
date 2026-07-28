@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HyperKnow Home — authorized internal reference reconstruction</title>
+    <script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+        color: #25282d;
+        background: #fbfbfb;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 1200px; background: #fbfbfb; }
+      button { font: inherit; color: inherit; }
+      .page { position: relative; width: 1488px; height: 907px; overflow: hidden; background: #fbfbfb; }
+      .utility { position: absolute; top: 22px; right: 24px; display: flex; align-items: center; gap: 10px; }
+      .utility button { height: 38px; border: 1px solid #e1e3e4; border-radius: 12px; background: #fff; padding: 0 14px; }
+      .utility .round { width: 38px; padding: 0; border-radius: 50%; }
+      .hero { position: absolute; top: 132px; left: 50%; width: 848px; transform: translateX(-50%); }
+      .hero h1 { margin: 0 0 22px; text-align: center; font-size: 28px; line-height: 36px; font-weight: 600; letter-spacing: -0.02em; }
+      .composer { height: 146px; border: 1px solid #e3e4e4; border-radius: 18px; background: #fff; box-shadow: 0 4px 8px rgba(31,35,40,.04); padding: 20px 16px 14px; }
+      .prompt { color: #9ca1a8; font-size: 16px; }
+      .composer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 58px; }
+      .left-actions, .right-actions { display: flex; align-items: center; gap: 8px; }
+      .icon-button, .tool-button { height: 34px; border: 1px solid #e2e3e4; background: #fff; border-radius: 17px; }
+      .icon-button { width: 34px; padding: 0; }
+      .tool-button { padding: 0 14px; }
+      .mode { color: #8a8f96; font-size: 14px; }
+      .send { width: 34px; height: 34px; border: 1px solid #e4e5e6; border-radius: 50%; background: #fafafa; color: #7f858c; }
+      .capabilities { margin: 22px auto 0; display: flex; width: 760px; flex-wrap: wrap; justify-content: center; gap: 12px 18px; }
+      .capabilities button { height: 38px; padding: 0 16px; border: 1px solid #e1e3e4; border-radius: 10px; background: #fff; box-shadow: 0 2px 5px rgba(31,35,40,.04); font-size: 14px; }
+      .badge { margin-left: 8px; padding: 3px 6px; border-radius: 5px; background: #eef7ea; color: #44804f; font-size: 11px; }
+      .badge.blue { background: #eef3fa; color: #49658b; }
+      .discover { position: absolute; left: 50%; bottom: 24px; width: 848px; transform: translateX(-50%); }
+      .discover-tabs { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; color: #a1a5aa; font-size: 13px; }
+      .tab-group { display: flex; gap: 10px; }
+      .tab { border: 0; background: transparent; padding: 7px 10px; color: #a1a5aa; }
+      .tab.active { border-radius: 8px; background: #f0f1f1; color: #4b5056; }
+      .story { display: flex; align-items: center; height: 47px; border-bottom: 1px solid #e4e5e5; color: #62676e; font-size: 14px; }
+      .story .mark { width: 28px; color: #7e8790; }
+      .status { position: absolute; right: 26px; bottom: 20px; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border: 1px solid #dfe2e2; border-radius: 10px; background: #fff; box-shadow: 0 3px 7px rgba(31,35,40,.06); font-size: 13px; }
+      .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #57b28b; }
+    </style>
+  </head>
+  <body>
+    <main class="page" aria-label="Authorized HyperKnow Home reference reconstruction">
+      <div class="utility"><span>文 A</span><button>Talk to Founders</button><button class="round">Gift</button><button class="round">Profile</button></div>
+      <section class="hero">
+        <h1>Time for flashcards?</h1>
+        <div class="composer">
+          <div class="prompt">Make a 2-page cheatsheet for my Micro class final</div>
+          <div class="composer-actions">
+            <div class="left-actions"><button class="icon-button">+</button><button class="tool-button">Tools</button><button class="icon-button">Audio</button></div>
+            <div class="right-actions"><span class="mode">Normal</span><button class="send">↑</button></div>
+          </div>
+        </div>
+        <div class="capabilities">
+          <button>Concept Explanation <span class="badge">Upgraded</span></button>
+          <button>Personal Study Materials Generation</button>
+          <button>Long-files Digestion</button>
+          <button>Problem Solving</button>
+          <button>Visualization <span class="badge blue">New</span></button>
+        </div>
+      </section>
+      <section class="discover">
+        <div class="discover-tabs"><div class="tab-group"><button class="tab active">Latest stuff to learn</button><button class="tab">What's New</button></div><span>Next</span></div>
+        <div class="story"><span class="mark">↗</span>Rare cancer-fighting plant compound's recipe decoded</div>
+        <div class="story"><span class="mark">↗</span>Roman Space Telescope to detect millions of invisible stars</div>
+        <div class="story"><span class="mark">↗</span>Magma surge triggered thousands of earthquakes in Atlantic</div>
+        <div class="story"><span class="mark">↗</span>Hidden underwater 'brakes' found to stop massive earthquakes</div>
+        <div class="story"><span class="mark">↗</span>Apple adds end-to-end encryption for RCS messaging in beta</div>
+      </section>
+      <div class="status"><span class="status-dot"></span>All services are online</div>
+    </main>
+  </body>
+</html>

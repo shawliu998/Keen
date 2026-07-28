@@ -1,0 +1,711 @@
+/*
+ * Deep Learn reader
+ *
+ * The composition follows the useful structure of the reviewed DeepTutor book
+ * reader: a quiet chapter rail, a bounded reading measure, and inline checks.
+ * Keen's persisted learning states and controls remain the source of truth.
+ */
+
+.deep-learn-page {
+  --deep-reader-border: color-mix(in srgb, var(--border-subtle) 88%, #cfcfca);
+  --deep-reader-muted: color-mix(in srgb, var(--text-secondary) 92%, #666);
+  --deep-reader-paper: var(--surface-primary);
+  min-height: 100%;
+  background: var(--deep-reader-paper);
+}
+
+.deep-learn-page .session-header {
+  min-height: 66px;
+  height: auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  padding: 11px 30px;
+  border-bottom: 1px solid var(--deep-reader-border);
+  background: var(--deep-reader-paper);
+}
+
+.deep-learn-page .session-header > div:first-child {
+  min-width: 0;
+}
+
+.deep-learn-page .session-header > div:first-child > span {
+  color: var(--deep-reader-muted);
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: .01em;
+  line-height: 1.3;
+  text-transform: none;
+}
+
+.deep-learn-page .session-header h1 {
+  max-width: 72ch;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 680;
+  letter-spacing: -.025em;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-learn-page .session-header > div:first-child > p {
+  max-width: 76ch;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-learn-page .session-header .ui-button {
+  min-height: 34px;
+  border-color: var(--deep-reader-border);
+  border-radius: 8px;
+  background: var(--surface-primary);
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.deep-learn-page .session-layout {
+  grid-template-columns: 256px minmax(0, 1fr);
+  min-height: calc(100vh - var(--toolbar-height) - 66px);
+}
+
+.deep-learn-page .session-layout:has(> .unit-nav.is-collapsed) {
+  grid-template-columns: 54px minmax(0, 1fr);
+}
+
+.deep-learn-page .unit-nav {
+  top: 66px;
+  height: calc(100vh - var(--toolbar-height) - 66px);
+  max-height: calc(100vh - var(--toolbar-height) - 66px);
+  padding: 24px 14px 32px;
+  border-right: 1px solid var(--deep-reader-border);
+  background: color-mix(in srgb, var(--surface-primary) 94%, var(--surface-secondary));
+}
+
+.deep-learn-page .unit-nav-heading {
+  margin: 0 8px 18px;
+}
+
+.deep-learn-page .unit-nav-heading > small {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 680;
+  letter-spacing: -.015em;
+}
+
+.deep-learn-page .unit-nav-heading .icon-button {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+.deep-learn-page .unit-nav-progress {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 10px;
+  margin: 0 8px 18px;
+  padding: 0 0 17px;
+  border: 0;
+  border-bottom: 1px solid var(--deep-reader-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--deep-reader-muted);
+  font-size: 11px;
+}
+
+.deep-learn-page .unit-nav-progress.is-unit-progress {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.deep-learn-page .unit-nav-progress > strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.deep-learn-page .unit-nav-progress > small {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+
+.deep-learn-page .unit-nav-progress [role="progressbar"] {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-selected);
+}
+
+.deep-learn-page .unit-nav-now {
+  margin: 0 8px 17px;
+  padding: 0 0 17px;
+  border: 0;
+  border-bottom: 1px solid var(--deep-reader-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.deep-learn-page .unit-nav-now > span,
+.deep-learn-page .unit-nav-now > div > span,
+.deep-learn-page .unit-nav-flow small {
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  font-weight: 620;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
+.deep-learn-page .unit-nav-now > strong,
+.deep-learn-page .unit-nav-flow strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.38;
+}
+
+.deep-learn-page .unit-nav-flow {
+  gap: 11px;
+}
+
+.deep-learn-page .unit-nav-flow li {
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.deep-learn-page .unit-nav-flow li > i {
+  width: 15px;
+  height: 15px;
+}
+
+.deep-learn-page .unit-nav button {
+  min-height: 42px;
+  margin: 2px 0;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.deep-learn-page .unit-nav button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.deep-learn-page .unit-nav button.active {
+  background: var(--surface-selected);
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.deep-learn-page .unit-nav button i {
+  width: 19px;
+  height: 19px;
+  border-color: var(--border-strong);
+  background: var(--surface-primary);
+  font-size: 9px;
+}
+
+.deep-learn-page .unit-nav button.active i {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.deep-learn-page .unit-nav button.done i {
+  border-color: var(--success);
+  background: var(--success);
+  color: #fff;
+}
+
+.deep-learn-page .lesson-content {
+  width: min(100%, 820px);
+  max-width: none;
+  margin: 0 auto;
+  padding: 48px 50px 104px;
+  overflow-wrap: anywhere;
+  overflow-anchor: none;
+}
+
+.deep-learn-page .lesson-kicker {
+  margin-bottom: 9px;
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.deep-learn-page .lesson-content > h2,
+.deep-learn-page .learning-path-preview-heading h2 {
+  max-width: 28ch;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(27px, 2.3vw, 34px);
+  font-weight: 700;
+  letter-spacing: -.045em;
+  line-height: 1.13;
+  text-wrap: balance;
+}
+
+.deep-learn-page .lesson-lead {
+  max-width: 66ch;
+  margin: 15px 0 0;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.deep-learn-page .lesson-reading,
+.deep-learn-page .lesson-source-block,
+.deep-learn-page .learning-markdown {
+  max-width: 72ch;
+  margin-top: 32px;
+  color: var(--text-reading);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.72;
+}
+
+.deep-learn-page .lesson-reading > p,
+.deep-learn-page .lesson-source-block > p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.deep-learn-page .lesson-note {
+  margin-top: 28px;
+  padding: 18px 20px;
+  border: 1px solid var(--deep-reader-border);
+  border-radius: 11px;
+  background: var(--surface-primary);
+}
+
+.deep-learn-page .lesson-note-label {
+  margin-bottom: 8px;
+  color: var(--text-primary);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+}
+
+.deep-learn-page .lesson-note-label strong {
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.deep-learn-page .lesson-note p {
+  color: var(--text-reading);
+  font-size: 16px;
+  line-height: 1.62;
+}
+
+.deep-learn-page .lesson-source-block {
+  margin-top: 31px;
+  padding: 20px 22px;
+  border: 1px solid var(--deep-reader-border);
+  border-radius: 12px;
+  background: var(--surface-primary);
+}
+
+.deep-learn-page .lesson-source-block > .ui-badge,
+.deep-learn-page .lesson-source-block > .badge {
+  min-height: 0;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-primary);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.deep-learn-page .learning-phase {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin-top: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.deep-learn-page .learning-phase + .learning-phase {
+  margin-top: 28px;
+}
+
+.deep-learn-page .learning-phase-label {
+  margin: 0 0 13px;
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.deep-learn-page .adaptive-decision-note {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 15px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--accent-soft) 42%, var(--surface-primary));
+}
+
+.deep-learn-page .adaptive-decision-note strong {
+  color: var(--accent-primary);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.deep-learn-page .adaptive-decision-note p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.deep-learn-page .adaptive-decision-note span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.deep-learn-page .lesson-content .learning-phase > .checkpoint,
+.deep-learn-page .lesson-content > .learning-phase-recall.is-closed-book-recall,
+.deep-learn-page .lesson-content .checkpoint.lesson-checkpoint {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin-top: 0;
+  padding: 23px 24px 24px;
+  border: 1px solid var(--deep-reader-border);
+  border-radius: 12px;
+  background: var(--surface-primary);
+  box-shadow: none;
+}
+
+.deep-learn-page .lesson-content > .learning-phase-recall.is-closed-book-recall {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.deep-learn-page .checkpoint > h2,
+.deep-learn-page .checkpoint > h3,
+.deep-learn-page .recall-result > h2,
+.deep-learn-page .learning-outcome > h2 {
+  max-width: 36ch;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 680;
+  letter-spacing: -.025em;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.deep-learn-page .checkpoint > p,
+.deep-learn-page .learning-outcome-copy,
+.deep-learn-page .recall-result > p {
+  max-width: 64ch;
+  margin: 9px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.deep-learn-page .checkpoint > .ui-badge,
+.deep-learn-page .checkpoint > .badge {
+  min-height: 0;
+  margin: 0 0 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.deep-learn-page .checkpoint-actions {
+  position: static;
+  align-items: center;
+  margin-top: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.deep-learn-page .checkpoint-actions .ui-button {
+  min-height: 38px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.deep-learn-page .checkpoint textarea,
+.deep-learn-page .answer-box textarea {
+  width: 100%;
+  min-height: 118px;
+  box-sizing: border-box;
+  margin-top: 9px;
+  padding: 14px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.deep-learn-page .checkpoint textarea:focus,
+.deep-learn-page .answer-box textarea:focus,
+.deep-learn-page .practice-checkpoint > input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.deep-learn-page .diagnostic-response-label,
+.deep-learn-page .demo-answer-label {
+  display: block;
+  margin-top: 18px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.deep-learn-page .recall-input-guidance {
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.deep-learn-page .answer-box {
+  display: block;
+  margin-top: 17px;
+}
+
+.deep-learn-page .demo-answer-actions {
+  margin-top: 10px;
+}
+
+.deep-learn-page .practice-question {
+  margin: 19px 0;
+  padding: 18px 20px;
+  border: 1px solid var(--deep-reader-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-secondary) 56%, var(--surface-primary));
+  color: var(--text-reading);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: 19px;
+  font-weight: 400;
+  line-height: 1.58;
+}
+
+.deep-learn-page .practice-equation {
+  font-size: 22px;
+}
+
+.deep-learn-page .practice-checkpoint > input {
+  width: min(100%, 420px);
+  min-height: 44px;
+  border-radius: 8px;
+}
+
+.deep-learn-page .math-notation {
+  color: var(--text-primary);
+  font-family: "STIX Two Math", "Cambria Math", "Times New Roman", serif;
+  font-size: 1.08em;
+}
+
+.deep-learn-page .math-display {
+  display: block;
+  width: fit-content;
+  min-width: 9rem;
+  margin: 18px auto;
+  padding: 13px 18px;
+  border: 1px solid var(--deep-reader-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-secondary) 56%, var(--surface-primary));
+  font-size: 1.35em;
+}
+
+.deep-learn-page .learning-outcome-metrics {
+  width: min(100%, 540px);
+  margin: 21px 0 0;
+  border-block: 1px solid var(--deep-reader-border);
+}
+
+.deep-learn-page .learning-outcome-metrics > div {
+  min-height: 40px;
+  padding: 9px 0;
+}
+
+.deep-learn-page .learning-outcome-metrics dt,
+.deep-learn-page .learning-outcome-metrics dd {
+  font-size: 12px;
+}
+
+.deep-learn-page .lesson-nav {
+  position: static;
+  align-items: center;
+  margin-top: 38px;
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--deep-reader-border);
+  background: transparent;
+}
+
+.deep-learn-page .lesson-nav .ui-button {
+  min-height: 36px;
+  border-radius: 8px;
+}
+
+.deep-learn-page .demo-recall-heading h3 {
+  max-width: 34ch;
+  font-size: 20px;
+  letter-spacing: -.025em;
+  line-height: 1.35;
+}
+
+.deep-learn-page .demo-recall-heading > p {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.deep-learn-page .demo-recall-feedback {
+  margin-top: 20px;
+  padding-top: 16px;
+}
+
+.deep-learn-page .session-complete-layout {
+  min-height: 0;
+  padding: 60px 32px 72px;
+}
+
+.deep-learn-page .session-complete-result {
+  width: min(100%, 720px);
+}
+
+.deep-learn-page .session-complete-result h2 {
+  font-size: 30px;
+  letter-spacing: -.04em;
+}
+
+.deep-learn-page .session-complete-metrics {
+  margin-top: 34px;
+  border-top-color: var(--deep-reader-border);
+}
+
+@media (max-width: 1040px) {
+  .deep-learn-page .session-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .deep-learn-page .lesson-content {
+    padding-inline: 38px;
+  }
+}
+
+@media (max-width: 760px) {
+  .deep-learn-page .session-header {
+    padding-inline: 20px;
+  }
+
+  .deep-learn-page .session-header > div:first-child > p {
+    display: none;
+  }
+
+  .deep-learn-page .session-layout,
+  .deep-learn-page .session-layout:has(> .unit-nav.is-collapsed) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .deep-learn-page .unit-nav {
+    position: static;
+    width: auto;
+    height: auto;
+    max-height: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--deep-reader-border);
+  }
+
+  .deep-learn-page .unit-nav.is-collapsed {
+    display: block;
+    padding: 10px 18px;
+  }
+
+  .deep-learn-page .unit-nav > button {
+    display: none;
+  }
+
+  .deep-learn-page .unit-nav-heading {
+    margin: 0;
+  }
+
+  .deep-learn-page .unit-nav-progress,
+  .deep-learn-page .unit-nav-now {
+    display: none;
+  }
+
+  .deep-learn-page .lesson-content {
+    padding: 32px 22px 76px;
+  }
+
+  .deep-learn-page .lesson-content > h2,
+  .deep-learn-page .learning-path-preview-heading h2 {
+    font-size: 28px;
+  }
+
+  .deep-learn-page .lesson-reading,
+  .deep-learn-page .lesson-source-block,
+  .deep-learn-page .learning-markdown {
+    font-size: 17px;
+  }
+
+  .deep-learn-page .lesson-nav {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .deep-learn-page .lesson-nav-secondary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+:root[data-theme="dark"] .deep-learn-page {
+  --deep-reader-border: var(--border-strong);
+}
+
+:root[data-theme="dark"] .deep-learn-page .unit-nav,
+:root[data-theme="dark"] .deep-learn-page .lesson-note,
+:root[data-theme="dark"] .deep-learn-page .lesson-source-block,
+:root[data-theme="dark"] .deep-learn-page .lesson-content .learning-phase > .checkpoint,
+:root[data-theme="dark"] .deep-learn-page .lesson-content .checkpoint.lesson-checkpoint {
+  background: var(--surface-primary);
+}

@@ -29,6 +29,22 @@ try {
       deviceScaleFactor: 1,
       reducedMotion: "reduce",
     });
+    if (pageConfig.assertRequestFree) {
+      await page.addInitScript(() => {
+        const calls = [];
+        Object.defineProperty(window, "__keenVisualRequestAudit", { value: calls });
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = (...args) => {
+          calls.push({ kind: "fetch", url: String(args[0]) });
+          return nativeFetch(...args);
+        };
+        const nativeOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function open(method, url, ...rest) {
+          calls.push({ kind: "xhr", method: String(method), url: String(url) });
+          return nativeOpen.call(this, method, url, ...rest);
+        };
+      });
+    }
     await page.addStyleTag({
       content:
         "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}",
@@ -36,6 +52,15 @@ try {
     await page.goto(`${config.baseUrl}${pageConfig.route}`, {
       waitUntil: "networkidle",
     });
+    for (const action of pageConfig.actions ?? []) {
+      const target = page.getByRole(action.role, { name: action.name, exact: true });
+      const targetCount = await target.count();
+      const targetIndex = action.index ?? 0;
+      if ((action.index === undefined && targetCount !== 1) || targetCount <= targetIndex) {
+        throw new Error(`${pageConfig.name}: could not resolve ${action.role} named ${action.name} at index ${targetIndex}; found ${targetCount}`);
+      }
+      await target.nth(targetIndex).click();
+    }
     await page.evaluate((selectors) => {
       for (const selector of selectors) {
         document.querySelectorAll(selector).forEach((element) => {
@@ -46,6 +71,12 @@ try {
 
     const currentPath = resolve(currentDirectory, `${pageConfig.name}.png`);
     await page.screenshot({ path: currentPath, animations: "disabled" });
+    const runtimeAudit = pageConfig.assertRequestFree
+      ? await page.evaluate(() => ({
+        browserRuntime: !window.__TAURI_INTERNALS__ && !window.__TAURI__,
+        applicationRequests: window.__keenVisualRequestAudit,
+      }))
+      : undefined;
     await page.close();
 
     const referencePath = resolve(toolDirectory, pageConfig.reference);
@@ -57,6 +88,7 @@ try {
         status: "missing_reference",
         currentPath,
         referencePath,
+        ...(runtimeAudit ? { runtimeAudit } : {}),
       });
       continue;
     }
@@ -73,6 +105,7 @@ try {
         status: "dimension_mismatch",
         reference: { width: reference.width, height: reference.height },
         current: { width: current.width, height: current.height },
+        ...(runtimeAudit ? { runtimeAudit } : {}),
       });
       continue;
     }
@@ -90,15 +123,21 @@ try {
       (mismatchedPixels / (current.width * current.height)) * 100;
     const diffPath = resolve(diffDirectory, `${pageConfig.name}.png`);
     await writeFile(diffPath, PNG.sync.write(diff));
+    const requestFreeFailed = runtimeAudit
+      && (!runtimeAudit.browserRuntime || runtimeAudit.applicationRequests.length > 0);
     results.push({
       name: pageConfig.name,
-      status:
-        mismatchPercent <= pageConfig.thresholdPercent ? "passed" : "failed",
+      status: requestFreeFailed
+        ? "failed"
+        : pageConfig.comparisonOnly
+        ? "compared"
+        : mismatchPercent <= pageConfig.thresholdPercent ? "passed" : "failed",
       mismatchPercent,
-      thresholdPercent: pageConfig.thresholdPercent,
+      ...(pageConfig.comparisonOnly ? { referenceStatus: "provisional" } : { thresholdPercent: pageConfig.thresholdPercent }),
       currentPath,
       referencePath,
       diffPath,
+      ...(runtimeAudit ? { runtimeAudit } : {}),
     });
   }
 } finally {
@@ -109,6 +148,6 @@ const reportPath = resolve(outputRoot, "report.json");
 await writeFile(reportPath, `${JSON.stringify(results, null, 2)}\n`);
 console.log(JSON.stringify({ reportPath, results }, null, 2));
 
-if (results.some((result) => result.status === "failed")) {
+if (results.some((result) => result.status === "failed" || result.status === "dimension_mismatch")) {
   process.exitCode = 1;
 }

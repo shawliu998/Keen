@@ -1,0 +1,17 @@
+Keen UI Audit Sample
+
+This synthetic document contains no personal or production data. It exists only
+to inspect the visible document-upload and learning-result interface of an
+authorized HyperKnow account.
+
+Study topic: Photosynthesis basics
+
+Photosynthesis converts light energy into chemical energy. In plants, the
+light-dependent reactions occur in thylakoid membranes and produce ATP and
+NADPH. The Calvin cycle occurs in the stroma and uses ATP and NADPH to help fix
+carbon dioxide into carbohydrates.
+
+Review prompts:
+1. Where do the light-dependent reactions occur?
+2. What two energy-carrying products support the Calvin cycle?
+3. Where does the Calvin cycle occur?

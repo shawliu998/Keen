@@ -1,0 +1,11 @@
+Command:
+npm test --workspace=@keen/desktop -- --run deepLearnPage.test.tsx
+
+Result:
+PASS (exit 0)
+
+Summary:
+- Test files: 1 passed
+- Tests: 27 passed
+- Existing React Router v7 future-flag warnings were printed.
+- No test failed.

@@ -1,0 +1,22 @@
+SYNTHETIC LEARNING FLOW TEST — EIGENVECTORS
+
+Purpose: non-personal content created only to evaluate a learning-product interface.
+
+Learning goal
+Explain how eigenvectors and eigenvalues describe the effect of a linear transformation.
+
+Key ideas
+1. An eigenvector is a non-zero vector whose direction is preserved up to sign after a linear transformation.
+2. The eigenvalue is the scalar that describes how the eigenvector is stretched, compressed, reversed, or mapped to zero.
+3. Eigenvectors that share an eigenvalue, together with the zero vector, form an eigenspace.
+
+Worked example
+For the diagonal matrix A = [[3, 0], [0, -2]], the vector [1, 0] is an eigenvector with eigenvalue 3. The vector [0, 1] is an eigenvector with eigenvalue -2, so its direction is reversed and its magnitude is doubled.
+
+Common misconception
+Not every vector is an eigenvector. A vector is an eigenvector only when the transformation does not rotate it away from its original span.
+
+Recall questions
+- What property must remain unchanged for a vector to be an eigenvector?
+- What does a negative eigenvalue mean geometrically?
+- How is an eigenspace different from a single eigenvector?
