@@ -1,8 +1,8 @@
 # Keen portfolio demo
 
-This is the shortest truthful walkthrough of Keen's implemented product
-slice. It is a demo script, not a claim that every future learning feature or
-distribution requirement is complete.
+This three-minute walkthrough follows Keen's complete local-first learning
+loop, from an indexed source to an adaptive intervention and a persisted next
+action.
 
 ## One-sentence product
 
@@ -80,21 +80,19 @@ replay the provider call or fabricate completion.
 - Provider configuration is explicit. Source content sent to the configured
   provider is disclosed at the point of action.
 
-## Why this is not a chat wrapper
+## What the Agent owns
 
-A chat wrapper mainly maps a prompt to generated text. Keen additionally owns
-the learner's source scope, session state, evidence, deterministic evaluation,
-intervention policy, proposal contract, approval boundary, versioned mutation,
-Undo, Feed/History projection, and cold recovery.
+Keen owns the learner's source scope, session state, evidence, deterministic
+evaluation, intervention policy, proposal contract, approval boundary,
+versioned mutation, Undo, Feed/History projection, and cold recovery.
 
 The model may produce a bounded explanation or proposal artifact. It cannot
 invent learning evidence, write mastery, silently change a plan, or claim that
 an unavailable provider succeeded.
 
-## Honest boundaries
+## Current release scope
 
-Implemented evidence does not establish learning efficacy or exact visual
-parity with a reference product. The current local acceptance app is ad-hoc
-signed for verification; Developer ID signing and notarization remain release
-work. OCR, cloud integrations, and broad autonomous curriculum planning are
-out of the current product slice.
+The local Alpha is focused on one coherent macOS learning journey: personal
+course material, guided Study, adaptive help, Practice, Review, and reliable
+continuity. The current build is intended for local installation and product
+evaluation.

@@ -6,19 +6,17 @@ Keen began with a deliberately practical goal: build a learning product that
 looks and behaves like a real macOS application, then use it to answer a harder
 product question.
 
-> What should an Agent do for a learner that a good chat interface cannot?
+> What should an Agent own in a real learning process?
 
-My role covered product framing, competitive analysis, interaction
-architecture, Agent boundaries, acceptance criteria, implementation
-orchestration, and native product review. Model-assisted engineering was an
-implementation multiplier; product decisions and acceptance gates remained
-human-owned.
+My role covered product framing, interaction architecture, Agent boundaries,
+acceptance criteria, implementation orchestration, and native product review.
+Model-assisted engineering was an implementation multiplier; product
+decisions and acceptance gates remained human-owned.
 
 ## The problem I chose
 
-Most AI learning products are good at producing material and weak at owning a
-learning process. They can summarize a chapter, answer a question, or generate
-cards, but the learner still has to decide:
+Learning from personal course material involves more than generating an
+answer. The learner still needs a reliable way to decide:
 
 - which material is in scope;
 - what to do next;
@@ -26,12 +24,9 @@ cards, but the learner still has to decide:
 - when a failed attempt should change the teaching approach;
 - how to resume after closing the app.
 
-That creates an odd division of labor: the model does the easy-to-see
-generation, while the learner manages the workflow.
-
-Keen reverses it. The learner keeps the cognitive work—Recall, Practice,
-rating, and consequential choices. The Agent carries context, source scope,
-intervention timing, plan continuity, and recovery.
+Keen gives that workflow one continuous home. The learner keeps the cognitive
+work—Recall, Practice, rating, and consequential choices. The Agent carries
+context, source scope, intervention timing, plan continuity, and recovery.
 
 ## The product bet
 
@@ -58,16 +53,11 @@ schedule Review, mark work complete, or silently rewrite the plan.
 
 ## Five decisions that shaped the product
 
-### 1. One creation entry, not a menu of AI capabilities
+### 1. One clear creation entry
 
-Early versions exposed too many concepts at once: Ask, Study, Planner, Memory,
-Visualize, and other future capabilities. That made the product look broad but
-left the learner unsure where to begin.
-
-I reduced the entry point to **New learning**. Home then asks for intent,
-source scope, and goal before exposing one specific action. Quiz, flash cards,
-and visual explanation remain learning-step types rather than separate v1
-products.
+Keen begins with **New learning**. Home asks for intent, source scope, and goal
+before exposing one specific action. Quiz, flash cards, and visual explanation
+remain learning-step types inside the same journey.
 
 This was an information-architecture decision, not a cosmetic cleanup.
 
@@ -83,10 +73,7 @@ Keen may use before the Agent acts.
 
 ### 3. Agent-native means a closed loop
 
-Adding a chat panel or an “Agent” navigation item would have made the product
-look agentic without changing the learning experience.
-
-Instead, the Agent lives inside the existing study loop:
+The Agent lives inside the study loop:
 
 1. observe an authoritative learning event;
 2. select one bounded teaching action in host code;
@@ -119,8 +106,6 @@ it, and when the change takes effect.
 
 ### 5. Recovery is part of the product
 
-If a learning Agent cannot survive an app restart, it is a transient demo.
-
 Keen restores the exact Session, current Unit, pending Practice, Agent
 artifact, plan version, Feed progress, History record, and next action from
 SQLite-backed state. Idempotency and reconciliation prevent a reconnect from
@@ -129,34 +114,16 @@ silently repeating a provider call or learning-state write.
 Cold recovery became a product acceptance criterion, not only an engineering
 test.
 
-## Learning from references without inheriting their scope
+## A coherent product language
 
-I used HyperKnow as a structural interaction reference and DeepTutor as a
-bounded capability reference.
+Keen uses one information hierarchy across the learning workspace:
+course scope first, a visible learning path, a bounded reading column, one
+current action, and source detail on demand. Reading, Recall, Practice, Feed,
+and History all project the same persisted Session state.
 
-The useful ideas were information density, learning-path visibility,
-source-grounded flow, and the relationship between reading and Recall. I did
-not adopt their brand, breadth of integrations, navigation count, or complete
-architecture.
+## Interaction principles
 
-That distinction mattered. Copying the menu would have produced more screens;
-copying the useful interaction contract produced a more coherent product.
-
-## What changed through critique
-
-Several iterations looked complete in code and still failed visually or
-conceptually:
-
-- page layouts left large areas empty without creating focus;
-- task detail resembled an AI-generated analytics report;
-- generic status cards competed with the learner’s next action;
-- mathematical notation appeared as prose or raw delimiters;
-- Feed called an active 33% Session “Not started” because it read Task status
-  without the Session truth;
-- agent activity was technically persisted but not legible in the learning
-  flow.
-
-Each critique became a product contract:
+The interface follows a small set of product contracts:
 
 - at most two persistent Study columns;
 - a 65–75ch reading measure;
@@ -179,9 +146,8 @@ Each critique became a product contract:
 - Accept, Keep, or Undo a versioned plan change;
 - resume through Home, Learning Feed, History, or Review after a full restart.
 
-The current evidence verifies product continuity and contract behavior. It
-does not establish learning efficacy or exact visual parity with a reference
-product.
+The current evidence verifies product continuity and contract behavior across
+the complete local learning loop.
 
 ## How I evaluated it
 

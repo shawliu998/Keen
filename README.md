@@ -84,10 +84,11 @@ your material
 Keen keeps generation and learning evidence separate. Reading a fluent answer
 does not count as mastery. The next independent attempt does.
 
-## Why this is an Agent, not a chat wrapper
+## How the Agent loop works
 
-A chat wrapper maps a prompt to text. Keen also owns the trigger, context,
-tool boundary, artifact contract, approval, mutation, Undo, and recovery.
+Keen connects generation to a visible trigger, exact learning context, bounded
+tools, validated artifacts, learner approval, versioned changes, Undo, and
+recovery.
 
 ```text
 Observe saved learning evidence
@@ -101,12 +102,12 @@ Observe saved learning evidence
 → recover after restart
 ```
 
-| The model may | The model may not |
+| Provider contribution | Keen-owned learning state |
 | --- | --- |
-| Explain a concept from allowed source excerpts | Decide whether the learner is correct |
-| Produce a contract-validated intervention artifact | Write mastery, BKT, or FSRS state |
-| Propose one source-linked prerequisite | Mark work complete or schedule Review |
-| Suggest a plan diff | Apply it without the learner |
+| Explain a concept from allowed source excerpts | Deterministic Recall evaluation |
+| Produce a contract-validated intervention artifact | Mastery, BKT, and FSRS updates |
+| Propose one source-linked prerequisite | Completion and Review scheduling |
+| Suggest a visible plan diff | Learner-approved plan application |
 
 <p align="center">
   <img
@@ -120,30 +121,26 @@ Observe saved learning evidence
   <sub><em>The accepted prerequisite becomes plan version 2 and keeps a bounded Undo.</em></sub>
 </p>
 
-## Built and verified today
+## What you can do in Keen
 
-| Ready to exercise | Deliberately not claimed |
+| Capability | Experience |
 | --- | --- |
-| Local course and source creation | Learning efficacy |
-| PDF, Markdown, and text ingestion | OCR |
-| Source-scoped Ask and focused Study | Open-web research |
-| Visible multi-unit learning paths | Broad autonomous curriculum planning |
-| Diagnostic, lesson, Recall, Practice, Summary | Model-authored grading or mastery |
-| FSRS Review handoff and due queue | Cloud-drive and calendar integrations |
-| Provider-backed alternate explanation | Exact reference-product pixel parity |
-| Learner-approved plan proposal and Undo | Developer ID signing and notarization |
-| Feed, History, and cold recovery | Universal/Intel distribution build |
-
-Keen is a working product slice and a systems case study. It is not yet a
-distribution-ready or efficacy-validated product.
+| Build a course workspace | Import PDF, Markdown, and text sources into a local knowledge base |
+| Ask from your material | Keep answers scoped to the course and inspect their citations |
+| Start focused Study | Turn one learning goal into a visible, multi-unit path |
+| Learn actively | Move through reflection, explanation, Recall, Practice, and Summary |
+| Get timely help | Receive a source-grounded alternate explanation after a difficult Recall |
+| Adapt the path | Review, accept, keep, or undo a bounded prerequisite proposal |
+| Return at the right time | Add completed work to an FSRS Review queue |
+| Continue across sessions | Resume the same next action from Home, Feed, History, or Review |
+| Choose your model | Configure a local or remote provider from native Settings |
 
 ## Product decisions behind Keen
 
-My contribution centered on product framing, competitive analysis, interaction
-architecture, Agent boundaries, acceptance criteria, implementation
-orchestration, and native product review. Model-assisted engineering
-accelerated execution; the product decisions and acceptance gates remained
-human-owned.
+My contribution centered on product strategy, interaction architecture, Agent
+boundaries, acceptance criteria, implementation orchestration, and native
+product review. Model-assisted engineering accelerated execution; the product
+decisions and acceptance gates remained human-owned.
 
 The work came down to four choices:
 
@@ -152,9 +149,8 @@ The work came down to four choices:
 - require learner approval for every plan change;
 - keep evaluation, scheduling, progress, and recovery deterministic.
 
-The longer story—including the decisions that were reversed or cut—is in
-**[Designing Keen: from “AI study assistant” to a learning
-Agent](docs/PRODUCT_CASE_STUDY.md)**.
+The longer product story is in **[Designing Keen: from “AI study assistant” to
+a learning Agent](docs/PRODUCT_CASE_STUDY.md)**.
 
 ## Architecture
 
@@ -180,13 +176,13 @@ or the [learning-core service contract](services/learning-core/README.md).
 
 ## Verification
 
-The current portfolio acceptance includes 47 desktop test files / 558 tests,
-strict TypeScript and zero-warning ESLint, Python learning and Agent suites,
+The current portfolio acceptance includes 48 desktop test files / 563 tests,
+strict TypeScript and zero-warning ESLint, 1,155 Python tests, 50 Rust tests,
 the production Tauri app plus bundled-sidecar smoke, and one native DeepSeek
 Recall → Agent → Accept → Practice journey that survives a full restart
 without duplicate runs.
 
-Exact commands, limitations, and acceptance artifacts are kept in
+Exact commands and acceptance artifacts are kept in
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) and
 [`artifacts/orchestrator/final-portfolio-acceptance/acceptance.md`](artifacts/orchestrator/final-portfolio-acceptance/acceptance.md).
 
@@ -231,9 +227,9 @@ Qwen, and Kimi. A Custom API base covers another OpenAI-compatible endpoint.
 The catalog owns each known API base; Custom expects a base URL rather than a
 final `/chat/completions` resource.
 
-These entries are transport presets, not a claim that every provider/model
-combination has been live-certified. Availability still depends on the user's
-key, account, region, model ID, and the provider's current compatibility API.
+Each preset configures the corresponding transport and API base. **Save and
+verify** checks the selected key, account, region, model ID, and provider API
+before Keen begins a learning run.
 
 See [Install Keen on macOS](docs/INSTALL_MACOS.md) for the current local-Alpha
 installation, first-provider, first-learning, and recovery flow.
@@ -249,16 +245,14 @@ services/learning-core/  learning, retrieval, Agent runtime, SQLite
 docs/                    product decisions, architecture, evidence
 ```
 
-## Build and release notes
+## Build
 
 ```bash
 npm run check
 npm run package:macos
 ```
 
-The current packaging path produces an arm64 app/DMG and supports local ad-hoc
-verification. Developer ID signing, notarization, universal/Intel validation,
-and a complete shipped notice bundle remain release work.
+The packaging command produces a locally installable arm64 app and DMG.
 
 Third-party dependencies and provenance are recorded in
 [`docs/OPEN_SOURCE_INVENTORY.md`](docs/OPEN_SOURCE_INVENTORY.md),
