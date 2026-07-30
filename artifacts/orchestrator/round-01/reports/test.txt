@@ -1,0 +1,13 @@
+Command:
+npm test --workspace=@keen/desktop -- --run appShell.test.tsx learningFeedPage.test.tsx
+
+Result:
+PASS (exit 0)
+
+Summary:
+- Test files: 2 passed
+- Tests: 33 passed
+- `appShell.test.tsx`: 10 passed
+- `learningFeedPage.test.tsx`: 23 passed
+
+Existing React Router v7 future-flag warnings were printed. No test failed.

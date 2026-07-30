@@ -1,0 +1,9 @@
+Command:
+npm run lint --workspace=@keen/desktop
+
+Result:
+PASS (exit 0)
+
+Output:
+> @keen/desktop@0.1.0 lint
+> eslint . --max-warnings 0

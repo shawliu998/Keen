@@ -1,0 +1,214 @@
+/* A shell-only adaptation of the authorized DeepTutor v1.5.1 overview:
+   wide warm navigation rail, quiet chrome, compact icon rhythm. */
+
+:root .deeptutor-shell {
+  --shell-sidebar-width: 216px;
+  --shell-sidebar-collapsed-width: 64px;
+  grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+  background: #fbfaf8;
+}
+
+:root .deeptutor-shell.is-collapsed {
+  grid-template-columns: var(--shell-sidebar-collapsed-width) minmax(0, 1fr);
+}
+
+:root .deeptutor-shell .shell-sidebar {
+  padding: 0 10px 12px;
+  border-right: 0;
+  background: #f4f3f1;
+  box-shadow: inset -1px 0 rgba(34, 33, 31, .035);
+}
+
+:root .deeptutor-shell .traffic-space {
+  height: 24px;
+  flex-basis: 24px;
+}
+
+:root .deeptutor-shell .shell-brand-row {
+  height: 46px;
+  min-height: 46px;
+  padding: 0 9px 0 11px;
+}
+
+:root .deeptutor-shell .shell-brand-lockup {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+:root .deeptutor-shell .brand-mark {
+  width: 25px;
+  height: 26px;
+}
+
+:root .deeptutor-shell .brand-wordmark,
+:root .deeptutor-shell .brand-wordmark img {
+  height: 15px;
+}
+
+:root .deeptutor-shell .brand-row .icon-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: #85817a;
+}
+
+:root .deeptutor-shell .brand-row .icon-button:hover:not(:disabled) {
+  background: rgba(41, 40, 37, .06);
+  color: #302f2c;
+}
+
+:root .deeptutor-shell .shell-new-learning {
+  height: 38px;
+  margin: 10px 0 12px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 10px;
+  background: #252c3a;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  box-shadow: 0 1px 1px rgba(24, 27, 35, .12);
+}
+
+:root .deeptutor-shell .shell-new-learning:hover:not(:disabled) {
+  background: #1e2532;
+}
+
+:root .deeptutor-shell .shell-primary-nav {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  padding: 0 0 12px;
+}
+
+:root .deeptutor-shell .nav-row,
+:root .deeptutor-shell .user-row {
+  height: 40px;
+  gap: 12px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: #403f3c;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:root .deeptutor-shell .nav-row svg,
+:root .deeptutor-shell .user-row svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.9;
+  color: #494844;
+}
+
+:root .deeptutor-shell .nav-row:hover,
+:root .deeptutor-shell .user-row:hover {
+  background: rgba(35, 34, 31, .045);
+  color: #171715;
+}
+
+:root .deeptutor-shell .nav-row.active {
+  background: rgba(40, 39, 36, .07);
+  color: #21201d;
+  font-weight: 650;
+}
+
+:root .deeptutor-shell .nav-row.active svg {
+  color: #22211f;
+  stroke-width: 2.05;
+}
+
+:root .deeptutor-shell .sidebar-footer {
+  padding: 12px 0 0;
+  border-top: 1px solid rgba(38, 37, 34, .08);
+  background: transparent;
+}
+
+:root .deeptutor-shell .shell-agent-status,
+:root .deeptutor-shell .shell-settings-row {
+  height: 38px;
+  padding-inline: 12px;
+}
+
+:root .deeptutor-shell .shell-agent-status,
+:root .deeptutor-shell .shell-agent-status .core-status,
+:root .deeptutor-shell .shell-settings-row {
+  color: #696762;
+  font-size: 11px;
+}
+
+:root .deeptutor-shell .main-area {
+  background: #fff;
+}
+
+:root .deeptutor-shell .shell-toolbar {
+  height: 64px;
+  flex-basis: 64px;
+  padding: 0 28px 0 32px;
+  border-bottom: 0;
+  background: #fff;
+}
+
+:root .deeptutor-shell .toolbar-title {
+  gap: 9px;
+}
+
+:root .deeptutor-shell .toolbar-title strong,
+:root .deeptutor-shell .toolbar-home .toolbar-title strong {
+  color: #20201e;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -.025em;
+}
+
+:root .deeptutor-shell .toolbar-actions {
+  gap: 10px;
+}
+
+:root .deeptutor-shell .toolbar-actions .icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #8a8882;
+}
+
+:root .deeptutor-shell .toolbar-actions .icon-button:hover:not(:disabled) {
+  background: #f5f4f2;
+  color: #2b2a27;
+}
+
+:root .deeptutor-shell .page-viewport {
+  background: #fff;
+}
+
+:root[data-theme="dark"] .deeptutor-shell { background: var(--app-background); }
+:root[data-theme="dark"] .deeptutor-shell .shell-sidebar { background: var(--sidebar-background); box-shadow: inset -1px 0 var(--border-subtle); }
+:root[data-theme="dark"] .deeptutor-shell .main-area,
+:root[data-theme="dark"] .deeptutor-shell .shell-toolbar,
+:root[data-theme="dark"] .deeptutor-shell .page-viewport { background: var(--surface-primary); }
+:root[data-theme="dark"] .deeptutor-shell .nav-row,
+:root[data-theme="dark"] .deeptutor-shell .user-row,
+:root[data-theme="dark"] .deeptutor-shell .nav-row svg,
+:root[data-theme="dark"] .deeptutor-shell .user-row svg { color: var(--text-secondary); }
+:root[data-theme="dark"] .deeptutor-shell .nav-row.active { background: var(--surface-selected); color: var(--text-primary); }
+
+@media (max-width: 1000px) {
+  :root .deeptutor-shell,
+  :root .deeptutor-shell.is-collapsed,
+  :root .deeptutor-shell.drawer-open {
+    grid-template-columns: var(--shell-sidebar-collapsed-width) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  :root .deeptutor-shell,
+  :root .deeptutor-shell.is-collapsed,
+  :root .deeptutor-shell.drawer-open {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  :root .deeptutor-shell .shell-toolbar { padding-inline: 14px 10px; }
+}

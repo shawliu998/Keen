@@ -9,6 +9,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@keen/api-client": fileURLToPath(new URL("../../packages/api-client/src/index.ts", import.meta.url)),
       "@keen/domain": fileURLToPath(new URL("../../packages/domain/src/index.ts", import.meta.url)),
       "@keen/ui": fileURLToPath(new URL("../../packages/ui/src/index.tsx", import.meta.url)),
     },

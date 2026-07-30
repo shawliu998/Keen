@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import UTC, datetime
 
+from .courses import normalize_course_title_key
 from .mastery import BktParameters, update_bkt
 
 
 def _dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row is not None else None
+
+
+class CourseTitleConflictError(ValueError):
+    """A new course would collide with a normalized current or legacy title."""
+
+
+class CourseIdempotencyConflictError(ValueError):
+    """An idempotency key was previously committed for another request."""
 
 
 class LearningRepository:
@@ -36,6 +46,83 @@ class LearningRepository:
                 (course_id,),
             ).fetchone()
         )
+
+    def create_course(
+        self,
+        *,
+        course_id: str,
+        title: str,
+        description: str,
+        idempotency_key: str,
+        created_at: str,
+    ) -> tuple[dict, bool]:
+        """Create once or replay an earlier matching request under one write lock.
+
+        Existing installations deliberately retain ``normalized_title`` as NULL.
+        They are still included in the Python normalization scan, so a legacy title
+        cannot be shadowed without rewriting legacy rows (or their duplicate data).
+        """
+
+        title_key = normalize_course_title_key(title)
+        canonical_payload = json.dumps(
+            {"description": description, "normalizedTitle": title_key},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            recorded = self.connection.execute(
+                """
+                SELECT canonical_payload_json, course_id
+                FROM course_create_idempotency
+                WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if recorded is not None:
+                if recorded["canonical_payload_json"] != canonical_payload:
+                    raise CourseIdempotencyConflictError
+                course = self.get_course(str(recorded["course_id"]))
+                if course is None:  # pragma: no cover - guarded by a foreign key
+                    raise RuntimeError("stored course creation replay is unavailable")
+                self.connection.commit()
+                return course, True
+
+            existing_titles = self.connection.execute(
+                "SELECT title FROM courses"
+            ).fetchall()
+            if any(
+                normalize_course_title_key(str(row["title"])) == title_key
+                for row in existing_titles
+            ):
+                raise CourseTitleConflictError
+
+            self.connection.execute(
+                """
+                INSERT INTO courses (id, title, description, created_at, normalized_title)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (course_id, title, description, created_at, title_key),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO course_create_idempotency
+                    (idempotency_key, canonical_payload_json, course_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (idempotency_key, canonical_payload, course_id, created_at),
+            )
+            self.connection.commit()
+        except Exception:
+            if self.connection.in_transaction:
+                self.connection.rollback()
+            raise
+
+        created = self.get_course(course_id)
+        if created is None:  # pragma: no cover - inserted in the transaction above
+            raise RuntimeError("course creation did not persist")
+        return created, False
 
     def list_tasks(
         self, *, course_id: str | None = None, status: str | None = None
@@ -120,24 +207,34 @@ class LearningRepository:
     def update_task(
         self, task_id: str, *, status: str | None, due_at: str | None
     ) -> dict | None:
-        if self.get_task(task_id) is None:
-            return None
         fields: list[str] = []
         parameters: list[str] = []
+        timestamp = datetime.now(UTC).isoformat()
         if status is not None:
             fields.append("status = ?")
             parameters.append(status)
+            fields.append(
+                """completed_at = CASE
+                    WHEN ? = 'completed'
+                         AND (status != 'completed' OR completed_at IS NULL) THEN ?
+                    WHEN ? != 'completed' THEN NULL
+                    ELSE completed_at
+                END"""
+            )
+            parameters.extend((status, timestamp, status))
         if due_at is not None:
             fields.append("due_at = ?")
             parameters.append(due_at)
         if fields:
             fields.append("updated_at = ?")
-            parameters.append(datetime.now(UTC).isoformat())
+            parameters.append(timestamp)
             parameters.append(task_id)
-            self.connection.execute(
+            cursor = self.connection.execute(
                 f"UPDATE study_tasks SET {', '.join(fields)} WHERE id = ?", parameters
             )
             self.connection.commit()
+            if cursor.rowcount != 1:
+                return None
         return self.get_task(task_id)
 
     def list_mastery(self, *, course_id: str | None = None) -> list[dict]:

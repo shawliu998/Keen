@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local-first proactive learning agent for macOS"
 authors = ["Keen contributors"]
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.85"
 
 [lib]
 name = "keen_desktop_lib"
@@ -15,10 +15,15 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+libc = "0.2"
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "=2.5.8"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 thiserror = "2"
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
 
 class JsonFormatter(logging.Formatter):
-    """Small JSON formatter suitable for sidecar stdout collection."""
+    """Small JSON formatter for sidecar diagnostic log collection."""
 
     _standard = set(logging.makeLogRecord({}).__dict__)
 
@@ -27,7 +28,9 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: int = logging.INFO) -> None:
-    handler = logging.StreamHandler()
+    # stdout is reserved for exact lifecycle protocol frames. Keeping diagnostics
+    # on stderr prevents a log message from masquerading as a supervisor event.
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers.clear()

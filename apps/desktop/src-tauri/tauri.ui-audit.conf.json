@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Keen UI Audit",
+  "identifier": "com.keen.learning.ui-audit",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Keen UI Audit",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1180,
+        "minHeight": 740,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 18
+        }
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
+  }
+}
